@@ -25,6 +25,8 @@ description: 隔離工作區建立器的逆操作:安全移除一個 task 的隔
 - **commit 成功後清理**:交付物已安全在分支上、工作目錄只剩過程噪音時，移除 worktree 並保留 task 分支供日後 merge。要續做可再 `git worktree add` 掛回。
 - **手動清理**:task 真的告一段落(常見是已 `git merge` 回 dev)時,清掉用不到的 worktree。
 
+清理前提是 orchestrator 已完成該 task 的驗證與收尾；只要還需要保留這個 worktree 來跑 review、測試、或回頭補資料，就不要提早 teardown。
+
 不要在這些情境使用:
 - worktree 還有未提交的 code(本 skill 設計上會拒絕;請先 commit)。
 - 想刪 journal 分支(預設保留——它是持久審計紀錄;真要刪才加 `--delete-journal`)。

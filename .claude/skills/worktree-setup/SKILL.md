@@ -40,7 +40,7 @@ node "$SKILL_DIR/scripts/worktree.js" --type <type> --scope <scope> [--base <bra
 
 ### scope 責任邊界
 
-腳本只 sanitize,不臆造 scope。scope 的來源、命名優先序與是否沿用 ticket id 都由呼叫端決定；本站只保證最終分支、回傳 scope 與 worktree 目錄一致。
+腳本只 sanitize,不臆造 scope。scope 的來源、命名優先序與是否沿用 ticket id 都由呼叫端決定；本站只保證最終分支、回傳 scope 與 worktree 目錄一致。回傳的 `path` / `branch` / `scope` 應由呼叫端寫入自己的流程狀態或 manifest,不要讓後續站重新推算。
 
 ## 輸出
 

@@ -17,7 +17,6 @@ description: flow 無關的 commit 站。輸入 commit context（commitType、sc
 - **分支已準備好**:本站**不建分支、不切分支、不加 collision 尾碼**。呼叫端須在進入本站前讓 repo 位於應提交的分支。
 - **工作樹範圍可判定**:預設模式假設工作樹從乾淨開始；declared 模式則以呼叫端提供的聲明交付清單為權威。
 - **commit type / scope 由 commit context 提供**。本站**不從 diff 推 type**(不看 `??`/`M`)。
-- 機械結果檔由呼叫端依本站 Markdown 摘要寫,不由本站直接產。
 
 ## 輸入
 
@@ -99,32 +98,19 @@ description: flow 無關的 commit 站。輸入 commit context（commitType、sc
 7. **git add**:`git add <挑出的程式碼/測試檔列表>`(逐一 add,**不用 `git add .`**,以免吞入 `.md` 或非預期變更)。
 8. **git commit**(當前分支):`git commit -m "<commitType>(<scope>): <description>"`。
 9. **取得 commit hash**:`git log -1 --format="%H %h %s"`。
-10. **寫 commit result 檔**:`orchestrator/auto-commit-result.md`(內容見「輸出」)。它含本次 commit hash,固定**在 commit 之後**寫;它是 `.md`,不進交付物 code commit。
-11. **發佈過程紀錄到 `journal/<scope>`**:將呼叫端提供的**過程紀錄清單**加上本站剛寫的 `orchestrator/auto-commit-result.md` 交給腳本——
+10. **發佈過程紀錄到 `journal/<scope>`**:將呼叫端提供的**過程紀錄清單**交給腳本——
     ```
     node "$SKILL_DIR/scripts/journal-publish.js" --scope <scope> -- <檔1> <檔2> ...
     ```
     腳本用底層 plumbing 把這些檔提交到孤兒分支 `journal/<scope>`(已存在則接一個新 commit、保留先前紀錄;tree 內**保留相對路徑**如 `<scope>/orchestrator/triage.md`,不同站同名檔不會互相覆蓋),**全程不 checkout、不碰當前工作樹**。解析回傳 JSON 取 `branch` / `commit`。
     > **journal 收檔規則**:`orchestrator/` 不進交付物 commit,但呼叫端提供的過程紀錄清單要進 journal 分支作為審計紀錄。
-12. **輸出固定結構 Markdown 摘要**,依自檢清單確認後交付。
+11. **輸出固定結構 Markdown 摘要**,依自檢清單確認後交付。
 
 ## 輸出
 
-兩部分,缺一不可:
-
-### 1. 實際寫到磁碟的 commit result 檔
-
-路徑:`orchestrator/auto-commit-result.md`(在 worktree 工作目錄下)。
-
-內容:當前分支、commit hash(long + short)、完整 commit message、staged 檔案清單、journal 分支與其 commit。
-
-### 2. 固定結構 Markdown 摘要(7 個 H2 區塊)
+固定結構 Markdown 摘要(6 個 H2 區塊)
 
 ```
-## 產出檔案
-
-- **[file:orchestrator/auto-commit-result.md]**
-
 ## Commit(交付物)
 
 - **分支**: <commitType>/<scope>(當前 worktree 分支,由隔離工作區建立器建立)
@@ -168,5 +154,4 @@ description: flow 無關的 commit 站。輸入 commit context（commitType、sc
 - commit message 格式符合 Conventional Commits,`type`/`scope` 取自 commit context(或回退已註明)
 - 過程 `.md` 已透過 `journal-publish.js` 發到 `journal/<scope>`,**未**進 feature 分支;`git log journal/<scope> -1` 可見
 - 全程 local:未 `git push`、未設 upstream、未開 PR、未改外部編排狀態、未自行推進流程
-- `orchestrator/auto-commit-result.md` 已實際寫到磁碟,且也已含在發到 journal 的清單裡
 - 若 commit context 缺失走了回退、或不在預期分支,已在「警告」誠實揭露
