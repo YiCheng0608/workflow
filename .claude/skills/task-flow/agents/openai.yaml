@@ -1,0 +1,4 @@
+interface:
+  display_name: "Task Flow"
+  short_description: "Run the generic task flow"
+  default_prompt: "Use $task-flow to run this requirement through the generic workflow."
