@@ -4,15 +4,15 @@
 
 ## 這個 repo 是什麼
 
-核心是一個**與任務類型無關的通用任務引擎**:**manifest(磁碟上的唯一事實來源)+ `cli.js`(adapter)+ `decide.js`(純函數決策)**。引擎不認得任何特定任務領域,只讀 `specs`(每個帶一個 worker 角色標籤)與 `tests`,照 `depends_on` 圖與旗標確定性推進。
+一個**與任務類型無關的通用任務引擎**:**manifest(磁碟上的唯一事實來源)+ `cli.js`(I/O adapter)+ `decide.js`(純函數決策)**。引擎不認得任何任務領域,只讀 manifest 通用欄位、照 `depends_on` 圖與旗標確定性推進。orchestrator 讀 manifest、呼叫 `cli.js`、派工收結果;實際工作交給三個 subagent 角色(非引擎的一部分):
 
-三個 subagent 角色(都不是引擎的一部分,由 orchestrator 派工):
+- **intake** — 拆需求成任務清單 + 驗證地圖,過**人類 gate** 後凍結成 manifest。整條流程唯一的動態步驟。
+- **worker** — 執行單一任務節點、產出成品;**不得私自再拆解**(要重拆的唯一路是退回重 intake)。
+- **reviewer** — 對著需求原文審 worker 產出,採對抗式 framing;不代改、不碰 manifest、不決定 routing。
 
-- **intake** — 解析需求、拆成任務清單、為每個任務指定驗證方式,產出「分析書 + 任務清單 + 驗證地圖」。整條流程唯一的動態步驟,過**人類 gate** 後凍結成 manifest。
-- **worker** — 執行單一任務節點、產出成品;**不得私自再拆解**(要重新拆解的唯一路是退回重 intake)。
-- **reviewer** — 對著需求原文(非 intake 轉述的衍生規格)審 worker 的產出,採對抗式 framing。
+一句話:**動態生計畫、靜態跑計畫** —— intake 依需求現生 manifest 過人類 gate,凍結後全由引擎照旗標確定性推進;能機器驗的節點實跑 test,無客觀裁判的誠實標記。
 
-一句話:**動態生計畫**(intake 依需求現生 manifest,過人類 gate)、**靜態跑計畫**(manifest 一凍結,後面全由引擎照旗標確定性推進)。能機器驗的節點實跑 test;無客觀裁判的節點誠實標記。完整設計見 [docs/design-notes/generic-recursive-task-engine.md](docs/design-notes/generic-recursive-task-engine.md)。
+完整設計與設計原理見 [docs/design-notes/generic-recursive-task-engine.md](docs/design-notes/generic-recursive-task-engine.md)——**該筆記為唯一事實來源,本節僅作定位、不再展開**(避免與筆記漂移)。
 
 ## 目錄與雙 runtime
 
