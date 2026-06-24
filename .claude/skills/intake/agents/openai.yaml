@@ -1,0 +1,4 @@
+interface:
+  display_name: "Intake"
+  short_description: "Plan workflow tasks and verification map"
+  default_prompt: "Use $intake to turn this requirement into an analysis, task list, and verification map for the generic workflow."
