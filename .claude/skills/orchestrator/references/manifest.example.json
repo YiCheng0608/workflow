@@ -16,7 +16,7 @@
   "_note_allowed_outputs": "spec.allowed_outputs(選填,glob 樣式陣列):宣告『這個 spec 只能產生哪些檔』;白名單外檔案會被引擎(applyProduce)改判 code 失敗、回頭重做。用來把彼此平行的 worker 鎖在不重疊的檔案 ownership 內,確保平行安全。`*` 為萬用字元。",
   "_note_forbid_outputs": "spec.forbid_outputs(選填,glob 樣式陣列):宣告『這個 spec 不得產生的檔』;outputs 命中任一樣式時改判 code 失敗、回頭重做。worker 寫成品但不寫測試,故禁 *.test.* / *.spec.* / *__tests__*(測試檔只能由 test 節點產)。",
   "_note_review_gate": "spec.review_gate(選填,boolean):宣告『本站產出成功後停下等使用者查看』(=人類 gate)。applyProduce 標 blocked(kind:'review')、next 轉 clarify;使用者 resume {\"approve\":true} 才進 produced/verified,帶修改意見 resume 則 reopen 重做。本範本只有 intake 帶 review_gate——人類 gate 的價值在審查驗證地圖,故設在 intake 產出之後。",
-  "_note_test_evidence": "test 結果的 evidence(pass:true 時必填、非空 object):實跑證據。kind:'unit' 的 pass 必含 { command, exit_code:0, passed, failed }(cli.js 驗 failed===0 且 passed>=1,todo-only 不算通過);kind:'e2e' 的形狀較自由(端到端行為描述 / 快照路徑 / 驗的是真依賴還是 mock 退路等),引擎只要求非空。",
+  "_note_test_evidence": "test 結果的 evidence(pass:true 時必填、非空 object):實跑證據。若 evidence 帶 failed / passed 計數,cli.js 會驗 failed===0 且 passed>=1(todo-only 不算通過)。kind:'unit' 的 pass 另必含 { command, exit_code:0, passed, failed };kind:'e2e' 的形狀較自由(端到端行為描述 / 快照路徑 / 驗的是真依賴還是 mock 退路等),引擎只要求非空。",
   "_note_env": "env(選填):本次任務的執行期事實 / 設定,由 intake 依需求填(任務需要什麼就寫什麼,沒提到的不臆造)。通用引擎不預設任何欄位。env_patchable 列出 worker 經 test 結果的 env_patch 可回寫的欄位白名單(只有執行期偵測到的事實可回寫,身份 / 前提欄位不可被 patch)。",
   "specs": {
     "spec-1": { "id": "spec-1", "skill": "intake", "status": "pending", "depends_on": [], "outputs": [], "last_failure": null, "fix_target": null, "review_gate": true },
