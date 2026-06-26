@@ -17,7 +17,7 @@ description: 與任務類型無關的通用任務引擎編排器。讀磁碟上�
 
 引擎(`cli.js` / `decide.js`)只認得通用欄位(`specs` / `tests` / `env` / `planning` / `orchestration`),不認得任何任務領域或角色語意。`spec.skill` 是 worker 角色標籤(`intake` / `worker`),你依它派一個扮演該角色的 subagent,把需求原文與任務描述交給它——不是去呼叫某個 skill 檔。
 
-你不做任何一步的實際工作、不判斷下一步,只循環四件事:
+有委派能力時,你不做任何一步的實際工作、不判斷下一步,只循環四件事:
 
 1. 問 `cli.js` 下一步是什麼
 2. 把對應的 worker subagent 委派出去做(produce 站再加一輪 reviewer)
@@ -30,7 +30,7 @@ description: 與任務類型無關的通用任務引擎編排器。讀磁碟上�
 - **routing 與平行度都不由你判斷**,一律來自 `cli.js next`(單一)或 `cli.js next-all`(批次)。`next-all` 的 `actions` 是 manifest `depends_on` 圖確定性算出的「此刻互相獨立、可同時跑」集合——平行多少 = 這一輪 `actions` 的大小,你不准自己讀 `depends_on` 去推。
 - **扁平:worker 不得私自再拆解任務**。需要重新拆解時,唯一的路是退回重 `intake`(reviewer 把 `blame` 指向 intake spec、`altitude:spec`);重 intake 一樣過人類 gate,不繞過人。
 - **不准手動編輯 manifest 狀態**。狀態一律只能透過 `cli.js produce` / `cli.js test` / `resume` 改。只有三種例外可碰結構/設定欄位:(a) bootstrap 第一次建立 draft manifest;(b) 引擎退回重 intake 後,新版任務清單需要受控更新 spec/test/planning 結構(見「重 intake 的結構修補」);(c) 使用者明確要求補做某個機器驗收時補一個 test 結構節點(見「補做機器驗收」)。新增節點只能以 `pending` 初始化,補完後由引擎自動排出來跑。
-- **worker 一律委派給子代理,主 agent 不親手跑任何一站**。只要 runtime 有委派能力,你只做協調(問 cli.js、派 worker / reviewer、寫 `result.json`、記回 manifest);worker 只讀輸入、產出自己的成品,不碰 manifest、不接著跑下一步。`result.json` 由你寫,不是 worker。
+- **有委派能力時,worker 一律委派給子代理,主 agent 不親手跑任何一站**。你只做協調(問 cli.js、派 worker / reviewer、寫 `result.json`、記回 manifest);worker 只讀輸入、產出自己的成品,不碰 manifest、不接著跑下一步。`result.json` 由你寫,不是 worker。
 - **每個 worker 產出都要過 reviewer**(見「reviewer 迴圈」)。reviewer 全程不碰 manifest / `result.json` / routing,只對著需求原文挑錯、不代改;它過了你才記 `ok:true`,審出做歪你才記 `ok:false` 回頭重做。
 - **一站完成不是停點,不得中途結束回合**。`cli.js produce` / `test` 記回成功後,同一回合立即回去問 `next` / `next-all` 連續推進。記回輸出已帶 `next`(下一個 action)與 `continue`:`continue:true` ⇒ 同回合續跑;`continue:false` ⇒ `next.type` 是停點,依該停點處置。合法停點只有三種:`clarify`(含人類 gate)、`done`、`halt`;其餘任何「先回報進度再說」的收尾都是中斷流程的 bug(進度可用一行帶過,但說完必須接著做)。
 - **test-runner worker 只能經 `cli.js test` 驅動**。任何 `manifest.tests[*].runner` 指到的測試只能由 `next` / `next-all` 吐出的 `test` action 觸發、結果只能經 `cli.js test` 記回——這樣 `environment` 失敗才會觸發 `m.block`→`clarify` 停下問人。絕不可為了「補跑一下」直接呼叫測試 worker、把它寫出的 .md 摘要當數,那會繞過引擎悄悄跑完。manifest 沒有對應 test 節點時要補做機器驗收,走「補做機器驗收」。
@@ -117,17 +117,17 @@ node "$SKILL_DIR/scripts/cli.js" validate $MANIFEST                       # boot
 
 ## 執行模型:兩條獨立的軸
 
-把這兩條軸分開,別綁在一起——綁死正是「主 agent 自己下去做事」的根源:
+執行粒度與執行者是兩件事,分開判斷:
 
-- **執行粒度**:`cli.js next` = 序列(一次一個 action),`cli.js next-all` = 平行(一次一批互相獨立的 action)。只影響加速,不影響「誰來跑」。
-- **執行者**:優先子代理。只要 runtime 有委派能力,每一個 produce/test 一律委派,主 agent 只做協調。序列 ≠ 自己跑(序列只是「一次派一個、等它回來、再派下一個」)。唯一退化是 runtime 完全沒有委派能力時才由主 agent inline 跑。委派走宿主原生子代理、in-session 走訂閱額度,別用 `claude -p` / `codex exec` 另開外部程序(那會額外計費)。
+- **執行粒度**:`cli.js next-all` = 一次取出本輪所有可平行 action;`cli.js next` = 一次取出單一 action。預設用 `next-all`;只有 runtime 不支援平行委派、使用者要求單步 debug、或正在縮小故障範圍時,才退回 `next`。粒度只影響一次派幾個 action,不改變誰執行 action。
+- **執行者**:有宿主原生委派能力時,每個 produce/test 一律委派給子代理;主 agent 只協調、轉錄結果、寫回 manifest。序列模式也是一次委派一個 action,不是主 agent inline 執行。委派必須走宿主原生能力,不得用 `claude -p` / `codex exec` 另開外部程序。若 runtime 有委派能力但需要使用者授權且尚未授權,停下請使用者授權;不要 inline。只有 runtime 完全沒有委派能力時,才進入 inline 退化模式。
 
-不論哪種模式,有四點要守(前兩點也是鐵則,在此給出平行情境的細節):
+不論使用 `next-all` 或 `next`,都必須遵守:
 
-1. 可平行哪些一律來自 `next-all` 的 `actions`,你不自己讀 `depends_on` 推。
-2. **狀態一律序列寫回**:子代理只「做事 + 回報摘要」不碰 manifest;你拿到回報後一個一個 `cli.js produce` / `test`——這樣兩個同時完成也不會搶寫同一個檔。
-3. **子代理 context 隔離**:委派時把這個任務的描述、上游 `outputs`(檔路徑)、需求原文與 `env` 事實明確交給它。
-4. **依賴獨立 ≠ 檔案獨立**:`next-all` 只保證這批 action 在 `depends_on` 上互不依賴,不保證它們寫入的檔案範圍不重疊。要平行安全,被平行的 worker / test 必須寫不重疊的輸出路徑或只做唯讀操作——這由 intake 的拆解(可用 `allowed_outputs` 把節點鎖進不重疊的檔案 ownership)保證。同一 spec 的多個 test 因常共用 runner / 工作區,`decideAll` 已每輪每 spec 只取一個 test 序列化,你不必特別處理。
+1. **順序與平行度只來自 manifest**:`next-all.actions` 是唯一可平行派工清單;不要自己讀 `depends_on` 推導可平行項。流程順序完全由 manifest 的 `depends_on` 決定;若某個 phase 必須等前一 phase 全部完成,intake 必須用 `depends_on` 明確表達 phase boundary,不可依賴 `next` 的序列行為保序。
+2. **狀態序列寫回**:子代理不碰 manifest;主 agent 收到回報後,逐一用 `cli.js produce` / `cli.js test` 寫回。
+3. **委派輸入要完整**:每次委派都明確提供任務描述、上游 `outputs` 檔案路徑、需求原文與 `env` 事實。
+4. **依賴獨立不等於檔案獨立**:`next-all` 只保證 action 在 `depends_on` 上互不依賴;平行 worker/test 仍必須寫入不重疊輸出或只做唯讀操作。需要平行安全時,intake 用任務拆分與 `allowed_outputs` 約束檔案 ownership。同一 spec 的多個 test 因常共用 runner / 工作區,`decideAll` 已每輪每 spec 只取一個 test 序列化,你不必特別處理。
 
 > 平行點長在哪由 manifest 的 `depends_on` 決定:多個 spec 同時 ready 且彼此無邊時,`next-all` 同輪吐出。intake 可把 ownership 不重疊的任務切成兄弟節點形成平行點。
 
@@ -246,7 +246,7 @@ test 結果(兩個正交軸 `altitude` + `blame`):
 
 - 全程沒有手動改過 manifest;每次狀態變更都經 `cli.js produce` / `cli.js test`,且都是逐一序列寫回
 - 每一步的「下一步 / 這一輪」都來自 `cli.js next` / `next-all`,沒有自己跳步、改順序、或自己讀 `depends_on` 決定平行哪些;平行時委派範圍就是該輪 `actions`
-- worker 一律委派給宿主子代理(in-session),主 agent 沒有親手執行過任何一站,也沒用 `claude -p` / `codex exec` 另開外部程序
+- 有委派能力時,worker 一律委派給宿主子代理(in-session),主 agent 沒有親手執行過任何一站,也沒用 `claude -p` / `codex exec` 另開外部程序
 - 沒有任何 worker 私自再拆解任務;需要重新拆解時走「退回重 intake」(`blame` 指向 intake spec),且 intake 重做後人類 gate 再次觸發
 - 每個 worker 產出都過 reviewer(對著需求原文、對抗式 framing),收斂版才記回;reviewer 全程沒碰 manifest / `result.json`、沒代改產出
 - 重做某個 `failed` spec 時已把 `last_failure` 與 `fix_target` 當修補指示交給 worker,沒讓它盲目重跑
