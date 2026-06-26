@@ -23,7 +23,7 @@ orchestrator 會提供:
 
 ## 產出
 
-在 `orchestrator/` 底下產出至少三份 Markdown:
+在 `orchestrator/` 底下產出四份 Markdown:
 
 - `orchestrator/intake-analysis.md`:需求理解、範圍、重要限制、需要保留的人類決策。
 - `orchestrator/intake-tasks.md`:扁平任務清單,每個任務包含 id、目的、輸入、輸出、依賴、ownership / allowed outputs 建議、不可做事項。
@@ -67,6 +67,7 @@ orchestrator 會提供:
 - 用 `depends_on` 表達真正資料 / 行為依賴;不要為了個人偏好的順序加假依賴。
 - 可平行的任務必須有不重疊的輸出 ownership;建議 `allowed_outputs` 或 `forbid_outputs`。
 - worker spec 預設不得寫測試檔;需要測試時用獨立 test 節點表達。
+- 可為每個任務標選填 `tier` 作為廠商中立的難度 / 槓桿提示,只接受 `high` / `low`;沒把握就省略。不要寫具體模型名或廠商。
 - 不要把 reviewer 當成任務節點。reviewer 是 orchestrator 在每個 worker produce 後跑的流程步驟。
 - 對下游任務給足語意:成功定義、上游 outputs、檔案 ownership、不得碰的範圍、可接受的人工判斷邊界。
 
@@ -92,16 +93,16 @@ orchestrator 會提供:
 
 ## 風險 / 成本地圖
 
-每個 worker 任務都必須有一條 review map 記錄:
+每個下游 worker 任務都必須有一條 review map 記錄。intake 本身是高槓桿規劃站,由 orchestrator 固定先過 full reviewer,不寫進下游 review map。
 
-- `review_depth:"full"`:完整 reviewer。用於 intake、高風險、`no-judge`、跨模組 / 權限 / 資料遷移 / 發佈、需求含糊、或失敗重做後的 spec。
+- `review_depth:"full"`:完整 reviewer。用於高風險、`no-judge`、跨模組 / 權限 / 資料遷移 / 發佈、需求含糊、或失敗重做後的 spec。
 - `review_depth:"focused"`:聚焦 reviewer。用於有 machine test 但仍有中等風險的 spec;reviewer 讀原文、任務、worker handoff,再抽查實際 diff / outputs。
-- `review_depth:"defer-until-signal"`:先靠 machine test 與 manifest 守門;只有出現升級訊號才派 reviewer。僅可用於低風險、output ownership 清楚、`requires_test:true` 且有可靠 machine test 的 spec。
+- `review_depth:"defer-until-signal"`:produce 前暫不派 reviewer,produce 後仍必須跑 machine test。僅可用於低風險、output ownership 清楚、`requires_test:true` 且有可靠 machine test 的 spec。
 
 自動升級條件必須明列,至少包含適用項:
 
 - worker 修改超出 `allowed_outputs` 或命中 `forbid_outputs`。
-- test fail、test 無法執行、或 evidence 不足。
+- test fail、test 無法執行、或 evidence 不足(此類訊號出現在 produce 後,由 test 回寫失敗並讓重做下一輪升級 full)。
 - worker 回報 `ok:false`、重做、或 `last_failure` 非空。
 - 任務實際碰到比 intake 預期更多的檔案 / 模組 / 外部依賴。
 - reviewer 發現拆解或規格問題。
@@ -123,11 +124,10 @@ orchestrator 會提供:
 - allowed_outputs: [...]
 - forbid_outputs: ["*.test.*", "*.spec.*", "*__tests__*"]
 - requires_test: true
+- tier: low
 - worker 指示: ...
 - 完成定義: ...
 - 拆分理由: ...
-- review_depth: full|focused|defer-until-signal
-- upgrade_triggers: [...]
 ```
 
 `intake-verification.md` 使用表格:
@@ -146,7 +146,7 @@ orchestrator 會提供:
 ```markdown
 | task | risk | review_depth | split_reason | upgrade_triggers | reason |
 |---|---|---|---|---|---|
-| spec-2 | low | defer-until-signal | 獨立檔案 ownership + unit test 可驗 | test fail; outputs 越界; last_failure 非空 | 低風險且有可靠 machine test |
+| spec-2 | low | defer-until-signal | 獨立檔案 ownership + unit test 可驗 | outputs 越界; last_failure 非空; test fail 後重做 | 低風險且有可靠 machine test |
 | spec-5 | high | full | 無客觀裁判 | always | no-judge 任務必須完整審 |
 ```
 
@@ -154,9 +154,9 @@ orchestrator 會提供:
 
 若建議 manifest 條目,只列引擎已知欄位:
 
-- spec: `id`, `skill`, `status`, `depends_on`, `outputs`, `last_failure`, `fix_target`, `review_gate`, `allowed_outputs`, `forbid_outputs`, `requires_test`
+- spec: `id`, `skill`, `status`, `depends_on`, `outputs`, `last_failure`, `fix_target`, `review_gate`, `allowed_outputs`, `forbid_outputs`, `requires_test`, `tier`
 - test: `id`, `verifies`, `runner`, `kind`, `status`, `depends_on`, `last_fail`
-- planning: `verification_map`, `review_map`, `cost_profile`
+- planning: `verification_map`, `review_map`
 - env / env_patchable
 
 不要發明 manifest 欄位承載任務語意;語意住在 intake 文件。
@@ -185,7 +185,7 @@ orchestrator 會提供:
 
 - 四份文件都存在於 `orchestrator/` 並列在 JSON `outputs`。
 - 每個下游任務都有驗證地圖記錄。
-- 每個下游任務都有 review map 記錄,且 `defer-until-signal` 只用於低風險、有可靠 machine test 的任務。
+- 每個下游任務都有 review map 記錄,且 `defer-until-signal` 只用於低風險、有可靠 machine test 的任務;test 失敗會讓重做下一輪升級 full。
 - 每個下游任務都有拆分理由;無明確理由的相鄰任務已合併。
 - `machine` 任務都有具體 runner / command 類型與 evidence 期待。
 - `no-judge` 任務誠實說明沒有客觀裁判。

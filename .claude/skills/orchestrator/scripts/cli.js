@@ -340,6 +340,8 @@ if (cmd === 'validate') {
     if (s.id !== id) errors.push(`spec「${id}」的 id 欄位(${s.id})與 key 不一致`);
     for (const d of (s.depends_on || []))
       if (!specs[d]) errors.push(`spec「${id}」depends_on 指向不存在的 spec「${d}」`);
+    if (s.tier !== undefined && !['high', 'low'].includes(s.tier))
+      errors.push(`spec「${id}」tier「${s.tier}」不合法(可用: high / low)`);
     // requires_test:flow 宣告「此 spec 必須被測」,凍結前就要掛好 test,否則 produce 後
     // 會走「無 test → 直接 verified」靜默跳過測試站(produce 記回時還有第二道防線)。
     if (s.requires_test === true && !Object.values(tests).some(t => t.verifies === id))
@@ -350,6 +352,31 @@ if (cmd === 'validate') {
     if (!specs[t.verifies]) errors.push(`test「${id}」verifies 指向不存在的 spec「${t.verifies}」`);
     for (const d of (t.depends_on || []))
       if (!tests[d]) errors.push(`test「${id}」depends_on 指向不存在的 test「${d}」`);
+  }
+
+  // review_map 是 orchestrator 的策略資料,不參與 decide.js routing;但 defer 代表 produce 前
+  // 合法略過 reviewer,所以凍結前必須確定它後面一定接得到機器驗證,否則會靜默沒有現實接觸。
+  const reviewMap = (m.planning || {}).review_map;
+  if (reviewMap !== undefined && !Array.isArray(reviewMap)) {
+    errors.push('planning.review_map 必須是 array');
+  } else {
+    for (const entry of (reviewMap || [])) {
+      if (!isPlainObject(entry)) { errors.push('planning.review_map 含非 object 項目'); continue; }
+      const id = entry.task;
+      if (typeof id !== 'string' || !id.trim()) { errors.push('planning.review_map 每一項都必須有 task(string)'); continue; }
+      const s = specs[id];
+      if (!s) { errors.push(`review_map 指向不存在的 spec「${id}」`); continue; }
+      if (!['full', 'focused', 'defer-until-signal'].includes(entry.review_depth)) {
+        errors.push(`review_map spec「${id}」的 review_depth「${entry.review_depth}」不合法(可用: full / focused / defer-until-signal)`);
+        continue;
+      }
+      if (entry.review_depth === 'defer-until-signal') {
+        const hasTest = Object.values(tests).some(t => t.verifies === id);
+        if (s.requires_test !== true || !hasTest) {
+          errors.push(`review_map 將 spec「${id}」標為 defer-until-signal,但該 spec 必須 requires_test:true 且至少有一個 test verifies 它`);
+        }
+      }
+    }
   }
 
   // 依賴環檢測(DFS 三色):有環 → 相關節點永遠不 ready → halt「無可執行動作」,先在這裡擋下。

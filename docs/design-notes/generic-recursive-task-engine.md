@@ -11,22 +11,22 @@
 核心分工:
 
 - **引擎**:manifest + `cli.js` + `decide.js`;只負責決策下一步與記錄狀態。
-- **orchestrator**:讀 manifest、呼叫 `cli.js`、派工、收結果,驅動全流程。
+- **orchestrator**:讀 manifest 與 `orchestrator/requirement.md`、呼叫 `cli.js`、派工、收結果,驅動全流程。
 - **subagent 角色**:由 orchestrator 派工,不是引擎的一部分。
 
 subagent 角色只有邊界語意:
 
 - **intake**:解析使用者需求、拆解任務、指定每個任務的驗證方式與審查深度,產出「分析書 + 任務清單 + 驗證地圖 + review map」。這是整條流程唯一的動態規劃站。
 - **worker**:執行單一任務節點、產出成品;不得私自再拆解任務。
-- **reviewer**:對著使用者原始需求與 worker 產出挑錯;不代改、不碰 manifest、不決定 routing。
+- **reviewer**:對著 `orchestrator/requirement.md` 中的使用者原始需求與 worker 產出挑錯;不代改、不碰 manifest、不決定 routing。
 
 ## 二、執行流程(扁平 + 單一人類 gate)
 
-1. orchestrator 派一個 intake 角色的 subagent 做規劃(分析需求 + 拆解任務 + 指定每個任務的驗證方式)。
+1. orchestrator 先把使用者原始需求原封不動寫成 `orchestrator/requirement.md`,再派一個 intake 角色的 subagent 做規劃(分析需求 + 拆解任務 + 指定每個任務的驗證方式與審查深度)。
 2. agent reviewer 先過一遍 `intake` 產出,清掉 agent 抓得到的錯。
 3. **人類 gate**:使用者檢查 `intake` 產出,同意後 orchestrator 才開始派工。
 4. orchestrator 照任務清單,把各任務派給 worker subagent。
-5. 每個 worker 產出後,依 human gate 核准的 review map 執行 full / focused reviewer,或在低風險且有可靠機器驗證時延後到升級訊號出現再審。
+5. 每個 worker 產出後、記回 produce 前,依 human gate 核准的 review map 執行 full / focused reviewer,或在低風險且有可靠機器驗證時合法 defer;produce 後仍由 test 節點實跑驗證。
 6. 能機器驗的任務(前端 e2e、功能 unit、後端 unit / 整合、真 API…)實跑真測試驗;無法機器驗的任務標記為「無客觀裁判」。
 7. reviewer 若在審某任務時發現「分析書 / 任務清單本身有問題」(可能整批關聯任務都錯),退回重 `intake`。
 8. 任務清單全綠 = 完成。
@@ -71,9 +71,11 @@ subagent 角色只有邊界語意:
 
 - **full**:完整 reviewer,用於高風險、`no-judge`、跨模組 / 權限 / 資料遷移 / 發佈、需求含糊、或失敗重做的節點。
 - **focused**:聚焦 reviewer,用 worker handoff summary 作索引,但仍必須讀使用者原文、任務描述並抽查實際 outputs / diff / 測試證據。
-- **defer-until-signal**:只用於低風險、output ownership 清楚、`requires_test:true` 且有可靠機器驗證的節點。出現 test fail、evidence 不足、outputs 越界、`last_failure` 非空或實際範圍擴大時,自動升級為 full。
+- **defer-until-signal**:只用於低風險、output ownership 清楚、`requires_test:true` 且有可靠機器驗證的節點。produce 前若 outputs 越界、`last_failure` 非空或實際範圍擴大,改走 full;produce 後若 test fail 或 evidence 不足,由 test 回寫失敗並讓重做下一輪升級 full。
 
 worker 的 handoff summary 只能降低 reviewer 找資料的成本,不能作為事實來源。成本控制不得取代人類 gate 或可機器驗的真 test。
+
+spec 可選填 `tier:"high"` / `"low"` 作為廠商中立的難度 / 槓桿提示;不確定就省略。`tier` 不參與引擎 routing,也不寫具體模型名或廠商。
 
 ## 八、邊界:扁平與遞迴
 

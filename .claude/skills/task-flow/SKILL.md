@@ -49,7 +49,7 @@ description: >-
    - 不進完整流程:單檔或少量明確修改、單一 bug、單一指令查證、單純 commit / worktree / PR / deploy 動作、或使用者明確要求「直接做」。
    - 進完整流程:跨多檔或多階段、需求尚需拆解、驗收方式需要人類 gate 接受、涉及多個 ownership、需要隔離 worktree + commit + teardown 串接。
    - 使用者明確要求即使小任務也跑完整流程時照跑,但要在 gate 摘要揭露執行成本較高。
-2. 若 preflight 判定不進完整流程,停止 task-flow,改由呼叫端直接執行該單步任務或單一 worker;不要建立 manifest。
+2. 若 preflight 判定不進完整流程,停止 task-flow,改由呼叫端直接用一般工具完成該單步任務;不要建立 manifest。
 3. 如果使用者指定在目前工作樹直接跑，或已經在含 `orchestrator/manifest.json` 的 task worktree，就直接跑 orchestrator。
 4. 否則先用 `worktree-setup` 建立或重用隔離 worktree，再在回傳的 `path` 內跑 orchestrator。
 5. 若 `orchestrator/manifest.json` 已存在，視為唯一事實來源並續跑；若不存在，就把原始需求交給 orchestrator 進 intake。

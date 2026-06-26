@@ -31,7 +31,7 @@ description: 與任務類型無關的通用任務引擎編排器。讀磁碟上�
 - **扁平:worker 不得私自再拆解任務**。需要重新拆解時,唯一的路是退回重 `intake`(reviewer 把 `blame` 指向 intake spec、`altitude:spec`);重 intake 一樣過人類 gate,不繞過人。
 - **不准手動編輯 manifest 狀態**。狀態一律只能透過 `cli.js produce` / `cli.js test` / `resume` 改。只有三種例外可碰結構/設定欄位:(a) bootstrap 第一次建立 draft manifest;(b) 引擎退回重 intake 後,新版任務清單需要受控更新 spec/test/planning 結構(見「重 intake 的結構修補」);(c) 使用者明確要求補做某個機器驗收時補一個 test 結構節點(見「補做機器驗收」)。新增節點只能以 `pending` 初始化,補完後由引擎自動排出來跑。
 - **有委派能力時,worker 一律委派給子代理,主 agent 不親手跑任何一站**。你只做協調(問 cli.js、派 worker / reviewer、寫 `result.json`、記回 manifest);worker 只讀輸入、產出自己的成品,不碰 manifest、不接著跑下一步。`result.json` 由你寫,不是 worker。
-- **worker 產出依人類 gate 核准的 review map 審查**(見「reviewer 迴圈」)。`full` / `focused` 都要派 reviewer;`defer-until-signal` 只能用於低風險且有可靠 machine test 的 spec,並在升級訊號出現時補派 reviewer。reviewer 全程不碰 manifest / `result.json` / routing,只對著需求原文挑錯、不代改;通過或合法 defer 後你才記 `ok:true`,審出做歪才記 `ok:false` 回頭重做。
+- **worker 產出依人類 gate 核准的 review map 審查**(見「reviewer 迴圈」)。`full` / `focused` 都要派 reviewer;`defer-until-signal` 只是在 produce 前合法略過 reviewer,後續仍必跑 machine test。reviewer 全程不碰 manifest / `result.json` / routing,只對著需求原文挑錯、不代改;通過或合法 defer 後你才記 `ok:true`,審出做歪才記 `ok:false` 回頭重做。
 - **一站完成不是停點,不得中途結束回合**。`cli.js produce` / `test` 記回成功後,同一回合立即回去問 `next` / `next-all` 連續推進。記回輸出已帶 `next`(下一個 action)與 `continue`:`continue:true` ⇒ 同回合續跑;`continue:false` ⇒ `next.type` 是停點,依該停點處置。合法停點只有三種:`clarify`(含人類 gate)、`done`、`halt`;其餘任何「先回報進度再說」的收尾都是中斷流程的 bug(進度可用一行帶過,但說完必須接著做)。
 - **test-runner worker 只能經 `cli.js test` 驅動**。任何 `manifest.tests[*].runner` 指到的測試只能由 `next` / `next-all` 吐出的 `test` action 觸發、結果只能經 `cli.js test` 記回——這樣 `environment` 失敗才會觸發 `m.block`→`clarify` 停下問人。絕不可為了「補跑一下」直接呼叫測試 worker、把它寫出的 .md 摘要當數,那會繞過引擎悄悄跑完。manifest 沒有對應 test 節點時要補做機器驗收,走「補做機器驗收」。
 - **確定性**:同樣的 manifest → `cli.js` 一定給同樣的 action,不同廠商的 agent 照此跑結果就一致。
@@ -54,14 +54,17 @@ description: 與任務類型無關的通用任務引擎編排器。讀磁碟上�
 - **CLI 腳本**:`$SKILL_DIR/scripts/cli.js`(同層還有 `sim.js`、`decide.js`,你只直接呼叫 `cli.js`)
 - **manifest 範本**:`$SKILL_DIR/references/manifest.example.json`(只讀的結構參考,不要改)
 - **工作用 manifest**:`orchestrator/manifest.json`(寫在使用者專案工作目錄下,不是 skill 目錄內)。下面用 `$MANIFEST` 代表它。
+- **需求原文**:`orchestrator/requirement.md`(bootstrap 時把使用者原始需求原封不動寫入)。所有 worker / reviewer 委派都帶這個路徑,避免靠 session 記憶或主 agent 轉述續跑。
 
 跑指令前先把 `$SKILL_DIR` 換成 harness 給你的實際絕對路徑(帶引號,路徑可能含空白)。
 
 ## manifest 的欄位邊界
 
-bootstrap / intake 只寫引擎會讀的通用欄位:spec 的 `id` / `skill` / `status` / `depends_on` / `outputs` / `last_failure` / `fix_target`,可選的 `review_gate` / `forbid_outputs` / `allowed_outputs` / `requires_test`;test 的 `id` / `verifies` / `runner` / `kind` / `status` / `depends_on` / `last_fail`;以及 `env`、`env_patchable`、`planning`、`orchestration`。`planning` 可包含 `verification_map`、`review_map`、`cost_profile`;這些是 gate / orchestrator 策略資料,`decide.js` 不讀。`block_kind` / `clarify` / `clarifications` / test `evidence` 等執行期欄位由 `cli.js` 寫,bootstrap / intake 不預填。
+bootstrap / intake 只寫引擎會讀的通用欄位與本節明列的 orchestrator 策略欄位:spec 的 `id` / `skill` / `status` / `depends_on` / `outputs` / `last_failure` / `fix_target`,可選的 `review_gate` / `forbid_outputs` / `allowed_outputs` / `requires_test` / `tier`;test 的 `id` / `verifies` / `runner` / `kind` / `status` / `depends_on` / `last_fail`;以及 `env`、`env_patchable`、`planning`、`orchestration`。`planning` 可包含 `verification_map`、`review_map`;`tier` 與 `planning` 內的策略資料只給人類 gate / orchestrator 派工使用,`decide.js` 不讀。`block_kind` / `clarify` / `clarifications` / test `evidence` 等執行期欄位由 `cli.js` 寫,bootstrap / intake 不預填。
 
-語意(任務在講什麼、為什麼這樣拆、每個任務的驗收細節)住在 **intake 產出的分析書 / 任務清單 / 驗證地圖(.md)**,不寫成 manifest 新欄位。**不要為了帶語意新增 manifest schema**:manifest 不增加 `inputs` / `bindings` / `phase` 等欄位。委派 worker 時,主 agent 讀 intake 的產出與需求原文,把對應的任務描述、上游 `outputs` 檔案與 `env` 事實交給子代理。
+`tier` 是選填、廠商中立的難度 / 槓桿提示,只接受 `"high"` / `"low"`;不確定就省略。實際 tier → 模型 / 子代理設定的對應是 host-local 決定,不寫進 manifest;不要在 manifest 寫具體模型名或廠商。
+
+語意(需求原文、任務在講什麼、為什麼這樣拆、每個任務的驗收細節)住在 `orchestrator/requirement.md` 與 **intake 產出的分析書 / 任務清單 / 驗證地圖 / review map(.md)**,不寫成 manifest 新欄位。**不要為了帶語意新增 manifest schema**:manifest 不增加 `inputs` / `bindings` / `phase` 等欄位。委派 worker 時,主 agent 讀 requirement 與 intake 的產出,把對應的任務描述、上游 `outputs` 檔案與 `env` 事實交給子代理。
 
 ## CLI 介面
 
@@ -78,7 +81,7 @@ node "$SKILL_DIR/scripts/cli.js" validate $MANIFEST                       # boot
 
 | action | 意思 | 你要做的事 |
 |---|---|---|
-| `{"type":"produce","spec":"spec-2"}` | 該產出/重做這個 spec | 派它的 worker(`spec.skill` 是角色),依 review map 完成審查或合法 defer,然後 `cli.js produce` |
+| `{"type":"produce","spec":"spec-2"}` | 該產出/重做這個 spec | 派它的 worker(`spec.skill` 是角色),依 review map 完成 produce 前審查或合法 defer,然後 `cli.js produce` |
 | `{"type":"test","test":"test-x","spec":"spec-2"}` | 該驗這個 test | 依 `test.runner` 委派對應測試 worker,然後 `cli.js test` |
 | `{"type":"clarify","spec"\|"test":"…","question":"…","kind":"requirement\|environment\|oscillation\|review"}` | 需要使用者介入,不可自動推進。`kind:"environment"` 帶 `test`(掛在跑不起來的 test);其餘帶 `spec`。`kind:"review"` 不是失敗,是人類 gate(見處理步驟 review 段) | 停下把 `question` 問使用者;拿到答覆後寫 `answer.json` → `cli.js resume $MANIFEST <回傳的 spec 或 test> answer.json`,再回主迴圈 |
 | `{"type":"done"}` | 全部 verified | 停止,向使用者交付成品 |
@@ -99,13 +102,13 @@ node "$SKILL_DIR/scripts/cli.js" validate $MANIFEST                       # boot
 工作用 manifest 固定為 `$MANIFEST`(= `orchestrator/manifest.json`,寫在使用者專案工作目錄下)。
 
 1. **準備 manifest**(intake —— 整條流程唯一的動態步驟,規劃完就凍結):
-   - 若 `$MANIFEST` 已存在 → 直接沿用,不重建,不重新規劃(這就是「接續跑到一半的流程」)。
-   - 若不存在,且只是要煙霧測試 / 試跑 → 把範本複製成工作檔(`mkdir -p orchestrator && cp "$SKILL_DIR/references/manifest.example.json" "$MANIFEST"`)。
-   - 若不存在,且使用者給的是真實需求 → 進「intake:動態規劃」,產出 intake 文件與 draft manifest,再用 `cli.js produce` 記回 intake spec 觸發人類 gate;使用者同意後才凍結並放行下游。不要為同一份 draft 再跑第二次 intake。
+   - 若 `$MANIFEST` 已存在 → 直接沿用,不重建,不重新規劃(這就是「接續跑到一半的流程」)。進主迴圈前若同目錄缺 `orchestrator/requirement.md`,停下請使用者補原始需求;不要用 session 記憶或 intake 轉述假裝原文。煙霧測試 / 試跑用的範本 manifest 不適用此檢查。
+   - 若不存在,且只是要煙霧測試 / 試跑 → 把範本複製成工作檔(`mkdir -p orchestrator && cp "$SKILL_DIR/references/manifest.example.json" "$MANIFEST"`),不需要建立 `requirement.md`。
+   - 若不存在,且使用者給的是真實需求 → 先把使用者原始需求原封不動寫成 `orchestrator/requirement.md`,再進「intake:動態規劃」,產出 intake 文件與 draft manifest,再用 `cli.js produce` 記回 intake spec 觸發人類 gate;使用者同意後才凍結並放行下游。不要為同一份 draft 再跑第二次 intake。
    - 一律對 `$MANIFEST` 操作,不要動到 example 檔。
 2. **問這一輪能跑什麼**(依執行模型擇一):平行用 `cli.js next-all`(一批互相獨立的 action),序列用 `cli.js next`(單一)。解析印出的 JSON。
 3. **派工**:
-   - `produce` → 讀 `manifest.specs[spec]`,依它的 `skill`(角色)派一個 worker 子代理;worker 的輸入取自 intake 產出裡這個任務的描述、它 `depends_on` 那些 spec 的 `outputs`、需求原文與 `env` 事實(子代理 context 隔離,要把檔案路徑與語意標籤明確交給它)。若這是重做(該 spec 的 `last_failure` 非 `null`)→ 務必把 `last_failure`(上次錯在哪)與 `fix_target`(`code`=修實作 / `spec`=改規格語意)一起交給 worker,讓它針對性修而非盲目重跑。並要求 worker:過程產物(`.md` 摘要等)寫在 `orchestrator/` 底下(避免被當成未提交的工作),且回報簡短 handoff summary(改了哪些檔、如何驗、風險點)。worker 產出後依 `planning.review_map` 決定 reviewer 深度(見「reviewer 迴圈」),收斂版或合法 defer 才記回。
+   - `produce` → 讀 `manifest.specs[spec]`,依它的 `skill`(角色)派一個 worker 子代理;worker 的輸入取自 `orchestrator/requirement.md`、intake 產出裡這個任務的描述、它 `depends_on` 那些 spec 的 `outputs` 與 `env` 事實(子代理 context 隔離,要把檔案路徑與語意標籤明確交給它)。若 spec 有 `tier:"high"` / `"low"`,依本 host 的對應選擇子代理模型 / 設定;沒有對應能力就忽略 tier。若這是重做(該 spec 的 `last_failure` 非 `null`)→ 務必把 `last_failure`(上次錯在哪)與 `fix_target`(`code`=修實作 / `spec`=改規格語意)一起交給 worker,讓它針對性修而非盲目重跑。並要求 worker:過程產物(`.md` 摘要等)寫在 `orchestrator/` 底下(避免被當成未提交的工作),且回報簡短 handoff summary(改了哪些檔、如何驗、風險點)。worker 產出後依 `planning.review_map` 決定 produce 前 reviewer 深度(見「reviewer 迴圈」),收斂版或合法 defer 才記回。
    - `test` → 把 `manifest.tests[test]` 對應的測試委派給子代理跑(對 `verifies` 的那個 spec 的產物)。
    - 平行時:把 `next-all` 這批 `actions` 的 produce/test 在同一回合一起委派、同時跑,等整批回來。
    - **收結果,序列記回**:每個子代理回報後,你依它回報末尾的 JSON 區塊覆核轉錄(見「結果檔格式」)寫成一個 `result.json`,逐一 `cli.js produce` / `cli.js test` 記回——一個一個寫,不要平行寫。
@@ -126,29 +129,29 @@ node "$SKILL_DIR/scripts/cli.js" validate $MANIFEST                       # boot
 
 1. **順序與平行度只來自 manifest**:`next-all.actions` 是唯一可平行派工清單;不要自己讀 `depends_on` 推導可平行項。流程順序完全由 manifest 的 `depends_on` 決定;若某個 phase 必須等前一 phase 全部完成,intake 必須用 `depends_on` 明確表達 phase boundary,不可依賴 `next` 的序列行為保序。
 2. **狀態序列寫回**:子代理不碰 manifest;主 agent 收到回報後,逐一用 `cli.js produce` / `cli.js test` 寫回。
-3. **委派輸入要完整**:每次委派都明確提供任務描述、上游 `outputs` 檔案路徑、需求原文與 `env` 事實。
+3. **委派輸入要完整**:每次委派都明確提供 `orchestrator/requirement.md`、任務描述、上游 `outputs` 檔案路徑與 `env` 事實;produce 站也要要求 worker 回報 handoff summary,供 focused reviewer 當索引。
 4. **依賴獨立不等於檔案獨立**:`next-all` 只保證 action 在 `depends_on` 上互不依賴;平行 worker/test 仍必須寫入不重疊輸出或只做唯讀操作。需要平行安全時,intake 用任務拆分與 `allowed_outputs` 約束檔案 ownership。同一 spec 的多個 test 因常共用 runner / 工作區,`decideAll` 已每輪每 spec 只取一個 test 序列化,你不必特別處理。
 
 > 平行點長在哪由 manifest 的 `depends_on` 決定:多個 spec 同時 ready 且彼此無邊時,`next-all` 同輪吐出。intake 可把 ownership 不重疊的任務切成兄弟節點形成平行點。
 
 ## reviewer 迴圈(依 review map 決定深度)
 
-worker 產出不是無條件直接記回:worker 產出後,依 human gate 核准的 `planning.review_map` 選審查深度。引擎對此無知(只認得 `cli.js produce` 記回的結果);reviewer 全程不碰 manifest / `result.json` / routing,只挑戰、不代改。
+worker 產出不是無條件直接記回:worker 產出後,依 human gate 核准的 `planning.review_map` 選審查深度。`review_map` 未列的 spec(或整份缺失)一律預設 `full`,讓 cost-aware 降級只能明確 opt-in、不能因漏記 fail-open。引擎對此無知(只認得 `cli.js produce` 記回的結果);reviewer 全程不碰 manifest / `result.json` / routing,只挑戰、不代改。
 
 review depth:
 
 - `full`:派一個獨立 reviewer 子代理,對著使用者原文、該任務描述、上游 outputs、worker 產出與實際 diff / 檔案逐項複查。`no-judge`、高風險、跨模組 / 權限 / 資料遷移 / 發佈、需求含糊、重做中的 spec 一律 full。
 - `focused`:派 reviewer,但輸入採差異導向。reviewer 必讀使用者原文與任務描述,可用 worker handoff summary 作索引,但必須抽查實際 outputs / diff / 檔案;不得只依 summary 通過。
-- `defer-until-signal`:暫不派 reviewer,先靠 `requires_test:true` 的 machine test、`allowed_outputs` / `forbid_outputs` 與 `cli.js` evidence 守門。只允許低風險、output ownership 清楚、有可靠 machine test 的 spec。若該 spec 沒有 test、是 `no-judge`、`last_failure` 非空、worker 回報 `ok:false`、outputs 越界、test fail / 無法跑 / evidence 不足,立即升級為 `full` reviewer 再決定 produce 結果。
+- `defer-until-signal`:produce 前暫不派 reviewer。只允許低風險、output ownership 清楚、`requires_test:true` 且有可靠 machine test 的 spec;若該 spec 沒有 test、是 `no-judge`、`last_failure` 非空、worker 回報 `ok:false`、或 outputs 越界,不得 defer,改走 `full` reviewer 後再決定 produce 結果。produce 記回後仍由 `cli.js test` 驅動 machine test;若 test fail / 無法跑 / evidence 不足,照 test 結果回寫失敗並重做,下一輪此 spec 視為升級訊號走 `full` reviewer。
 
 worker handoff summary 只作導覽索引,不是事實來源。reviewer 的事實來源仍是使用者原文、任務描述、上游 outputs、實際產物 / diff 與測試證據。
 
 **獨立性怎麼拉**(同一模型供應商下盡量降低錯誤相關性):
 
-- **reviewer 同時接收 input 與 output**,且 input 為**使用者原文、原封不動**傳給每一個 reviewer,而非經 intake 轉述的衍生規格。此舉使 reviewer 由「一致性檢查」升級為「忠實度檢查」。
+- **reviewer 同時接收 input 與 output**,且 input 包含 `orchestrator/requirement.md` 中**原封不動**的使用者原文,而非只給 intake 轉述的衍生規格。此舉使 reviewer 由「一致性檢查」升級為「忠實度檢查」。
 - **以對抗式 framing 取得部分分布獨立**:worker 受命「完成任務」,reviewer 受命「假設此產出已上線並出問題,反推其失效方式」。
 - **高槓桿節點(intake)採對抗式、明令『盡力挑漏』的 reviewer**,而非確認式 reviewer。
-- **成本控制不取代現實接觸**:`defer-until-signal` 只能把 reviewer 延後到風險訊號出現,不能取代 human gate 或 machine test。
+- **成本控制不取代現實接觸**:`defer-until-signal` 只能略過 produce 前 reviewer,不能取代 human gate 或後續 machine test。
 
 **收斂後記回**:reviewer 過了或合法 defer → `{ ok:true, outputs:[…] }`;reviewer 審出做歪 → `{ ok:false, reason, fix_target:"code"|"spec" }` 或往前歸咎 `{ ok:false, blame:"spec-上游" }`,由引擎回頭重做。worker↔reviewer 最多 3 輪;3 輪仍未收斂視為這一站產不出來,照 produce 失敗記回讓引擎接手(會留下無進度訊號,反覆即觸發震盪 clarify 停下問人)。
 
@@ -160,7 +163,7 @@ worker handoff summary 只作導覽索引,不是事實來源。reviewer 的事�
 
 **你要做的**:
 
-1. **派 intake 子代理**產出分析書 + 任務清單 + **驗證地圖** + **review map**(每個任務一欄「驗證方式」:是會跑的 test(機器裁判),還是僅由 agent 主觀判定;另列風險、拆分理由、review depth、升級條件)。高槓桿,intake 產出先過一輪「盡力挑漏」的對抗式 reviewer。
+1. **派 intake 子代理**產出分析書 + 任務清單 + **驗證地圖** + **review map**(下游 worker 任務逐一列驗證方式、風險、拆分理由、review depth 與升級條件)。高槓桿,intake 產出先過一輪「盡力挑漏」的對抗式 reviewer;這一輪不靠 review map。
 2. 依 intake 的任務清單,決定這次要哪些 spec(各自 `skill` 角色、`depends_on`)、配哪些 test(`verifies` 指向哪個 spec)。能機器驗的任務掛真 test(`kind:'unit'`/`'e2e'`、指定 `runner`);無客觀裁判的任務不掛 test,誠實標記。這一步只做一次 draft manifest,不要等主迴圈又重跑同一份 intake。
 3. 依 `manifest.example.json` 的結構寫出 `$MANIFEST`:
    - 每個 spec 帶 `id` / `skill` / `status:"pending"` / `depends_on` / `outputs:[]` / `last_failure:null` / `fix_target:null`;每個 test 帶 `id` / `verifies` / `runner` / `kind` / `status:"pending"` / `last_fail:null`。
@@ -170,10 +173,11 @@ worker handoff summary 只作導覽索引,不是事實來源。reviewer 的事�
      - `forbid_outputs`(glob 陣列):宣告「這個 spec 不得產生的檔」;produce 記回時 outputs 命中任一樣式 → 引擎改判 `code` 失敗回頭重做。worker 寫成品不寫測試,故禁 `*.test.*` / `*.spec.*` / `*__tests__*`。
      - `allowed_outputs`(glob 陣列):宣告「這個 spec 只能產生的檔」;outputs 有任一檔未命中白名單 → 改判 `code` 失敗回頭重做。用來把彼此平行的節點鎖進不重疊的檔案 ownership。
      - `requires_test`(boolean):宣告「此 spec 必須有 test 驗證」;`validate` 與 produce 記回都會擋「宣告了卻沒掛 test」(驗證地圖標 machine 的節點一律填)。
+     - `tier`(`"high"` / `"low"`):選填的 orchestrator 派工提示;引擎不讀,不影響 routing。不需要或不確定時省略。
      - `env_patchable`(string 陣列):worker 經 `env_patch` 可回寫的 env 欄位白名單,防 worker 改寫身份 / 前提欄位。
    - `env` 依需求填(這次任務需要哪些執行期事實 / 設定就寫哪些);沒需要的欄位不臆造。
-   - **寫出後、凍結前先跑 `cli.js validate $MANIFEST`**(`depends_on` / `verifies` / test `depends_on` 都指向存在的節點、依賴無環);回 `{ok:false,errors}` 就先修好再凍結——別把懸空參照或成環的 manifest 丟進主迴圈,引擎不報錯,只會讓相關節點永遠不 ready、最後撞 `halt`,難診斷。
-4. **記錄驗證地圖與 review map**:`manifest.planning.verification_map` 逐任務寫 `{ task, verdict:"machine"|"no-judge", how, reason }`;`manifest.planning.review_map` 逐任務寫 `{ task, risk, review_depth, split_reason, upgrade_triggers, reason }`;`manifest.planning.cost_profile` 預設 `"standard"`。這些欄位純策略與人類可讀資料,不參與 `decide.js` 控制流。形狀見 `manifest.example.json` 的 `planning` 區塊。
+   - **寫出後、凍結前先跑 `cli.js validate $MANIFEST`**(`depends_on` / `verifies` / test `depends_on` 都指向存在的節點、依賴無環;`tier` 與 `review_map.review_depth` enum 合法;`review_map.task` 指向存在 spec;`review_map` 標 `defer-until-signal` 的 spec 必須 `requires_test:true` 且有 test verifies 它);回 `{ok:false,errors}` 就先修好再凍結——別把懸空參照、成環或無機器護欄的 defer manifest 丟進主迴圈,引擎不報錯,只會讓相關節點永遠不 ready 或靜默缺少現實接觸,難診斷。
+4. **記錄驗證地圖與 review map**:`manifest.planning.verification_map` 逐任務寫 `{ task, verdict:"machine"|"no-judge", how, reason }`;`manifest.planning.review_map` 逐任務寫 `{ task, risk, review_depth, split_reason, upgrade_triggers, reason }`。這些欄位純策略與人類可讀資料,不參與 `decide.js` 控制流。形狀見 `manifest.example.json` 的 `planning` 區塊。
 5. **記回 intake 產出以觸發人類 gate**:寫一份 result.json,至少包含 `{ "ok": true, "outputs": ["orchestrator/intake.md", ...] }`,再跑 `cli.js produce $MANIFEST <intake spec id> result.json`。intake / `review_gate` spec 不可省略 outputs,因為 gate 必須把分析書、任務清單、驗證地圖與 review map 交給使用者看。
 6. **人類 gate**:`review_gate:true` 的 intake spec 在產出後會被引擎標 `blocked(kind:'review')`,主迴圈收到 `kind:"review"` 的 clarify 時停下。把分析書、任務清單、**特別是驗證地圖與 review map**呈現給使用者——人確認的不只是「要做這些任務」,而是「**接受其中哪些任務沒有客觀裁判、哪些任務先延後 reviewer、哪些訊號會自動升級**」。同意 → resume `{approve:true}` 放行下游;要修改 → resume 帶意見重做 intake、再次 gate。
 
@@ -257,7 +261,7 @@ test 結果(兩個正交軸 `altitude` + `blame`):
 - 每一步的「下一步 / 這一輪」都來自 `cli.js next` / `next-all`,沒有自己跳步、改順序、或自己讀 `depends_on` 決定平行哪些;平行時委派範圍就是該輪 `actions`
 - 有委派能力時,worker 一律委派給宿主子代理(in-session),主 agent 沒有親手執行過任何一站,也沒用 `claude -p` / `codex exec` 另開外部程序
 - 沒有任何 worker 私自再拆解任務;需要重新拆解時走「退回重 intake」(`blame` 指向 intake spec),且 intake 重做後人類 gate 再次觸發
-- 每個 worker 產出都依 `planning.review_map` 完成 `full` / `focused` reviewer 或合法 `defer-until-signal`;任何升級訊號都已升級為 `full` 後才記回
+- 每個 worker 委派都要求 handoff summary(改了哪些檔、如何驗、風險點);每個 worker 產出都依 `planning.review_map` 完成 produce 前 `full` / `focused` reviewer 或合法 `defer-until-signal`;produce 後 test 失敗 / evidence 不足已經由 `cli.js test` 回寫,且重做下一輪會升級為 `full`
 - 重做某個 `failed` spec 時已把 `last_failure` 與 `fix_target` 當修補指示交給 worker,沒讓它盲目重跑
 - 每份 `result.json` 都從 worker 回報的 JSON 區塊覆核轉錄而來(blame 存在、altitude 合法、pass 附實跑 evidence),沒有自由創作 `altitude` / `blame`,也沒替沒附證據的 pass 補造 evidence;沒把 `result.json` / JSON 區塊當成果 surface 給使用者
 - 收到 `clarify` 時已把 `question` 原樣問使用者、未臆測答案;未把 `requirement` / `environment` 硬當 code/spec 重跑

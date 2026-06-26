@@ -23,11 +23,13 @@
    - 若不存在,orchestrator 先進 intake。
 
 3. **intake 動態規劃**
+   - bootstrap 時先把使用者原始需求原封不動寫成 `orchestrator/requirement.md`;後續 worker / reviewer 都讀這份需求原文。
    - intake 只做規劃,不實作、不跑測試、不寫 manifest 狀態。
-   - 產出三份 gate 可審文件:
+   - 產出四份 gate 可審文件:
      - `orchestrator/intake-analysis.md`
      - `orchestrator/intake-tasks.md`
      - `orchestrator/intake-verification.md`
+     - `orchestrator/intake-review-map.md`
    - 驗證地圖逐任務標記 `machine` 或 `no-judge`。
    - review map 逐任務標記 `full` / `focused` / `defer-until-signal` 與升級條件。
 
@@ -39,7 +41,7 @@
 5. **凍結 manifest 後靜態執行**
    - orchestrator 每輪只問 `cli.js next` 或 `cli.js next-all`。
    - `produce` action 派 worker 做單一任務節點。
-   - 每個 worker 產出依 review map 走完整 reviewer、聚焦 reviewer,或在低風險且有可靠機器驗證時延後到升級訊號出現。
+   - 每個 worker 產出依 review map 走完整 reviewer、聚焦 reviewer,或在低風險且有可靠機器驗證時於 produce 前合法 defer。
    - `test` action 必須透過 `cli.js test` 記回真實測試證據。
    - worker 不得私自再拆任務;要重拆只能退回重 intake,且再次經過人類 gate。
 

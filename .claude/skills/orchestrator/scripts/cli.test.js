@@ -399,6 +399,57 @@ test('requires_test:validate 擋在凍結前,produce 記回擋第二道', () => 
   assert.equal(r.out.status, 'produced');
 });
 
+test('review_map defer:validate 要求 requires_test:true 且有 test verifies', () => {
+  const m = fixture({
+    planning: { review_map: [
+      { task: 'spec-2', risk: 'low', review_depth: 'defer-until-signal', split_reason: '低風險', upgrade_triggers: ['test fail'], reason: '有機器驗證' },
+    ] },
+  });
+  let mp = writeJson('m.json', m);
+  let r = run('validate', mp);
+  assert.equal(r.code, 1, 'defer 卻沒有 requires_test/test 應被 validate 擋下');
+  assert.ok(JSON.parse(r.stdout).errors.some(e => e.includes('defer-until-signal') && e.includes('spec-2')));
+
+  m.specs['spec-2'].requires_test = true;
+  m.tests['test-spec2'] = { id: 'test-spec2', verifies: 'spec-2', runner: 'unit-tests', kind: 'unit', status: 'pending', last_fail: null };
+  mp = writeJson('m.json', m);
+  r = run('validate', mp);
+  assert.equal(r.code, 0, r.stdout || r.err);
+});
+
+test('review_map validate:非 array 或非 object 項目 → ok:false、exit 1', () => {
+  let mp = writeJson('m.json', fixture({ planning: { review_map: { task: 'spec-2' } } }));
+  let r = run('validate', mp);
+  assert.equal(r.code, 1);
+  assert.ok(JSON.parse(r.stdout).errors.some(e => e.includes('planning.review_map 必須是 array')));
+
+  mp = writeJson('m.json', fixture({ planning: { review_map: ['bad-entry'] } }));
+  r = run('validate', mp);
+  assert.equal(r.code, 1);
+  assert.ok(JSON.parse(r.stdout).errors.some(e => e.includes('planning.review_map 含非 object')));
+});
+
+test('review_map validate:task 必須存在、review_depth 必須合法', () => {
+  const mp = writeJson('m.json', fixture({ planning: { review_map: [
+    { task: 'spec-missing', risk: 'low', review_depth: 'full', split_reason: 'x', upgrade_triggers: [], reason: 'x' },
+    { task: 'spec-4', risk: 'low', review_depth: 'light', split_reason: 'x', upgrade_triggers: [], reason: 'x' },
+  ] } }));
+  const r = run('validate', mp);
+  assert.equal(r.code, 1);
+  const errors = JSON.parse(r.stdout).errors;
+  assert.ok(errors.some(e => e.includes('review_map 指向不存在的 spec「spec-missing」')));
+  assert.ok(errors.some(e => e.includes('review_depth') && e.includes('light')));
+});
+
+test('tier validate:只接受 high / low', () => {
+  const m = fixture();
+  m.specs['spec-4'].tier = 'medium';
+  const mp = writeJson('m.json', m);
+  const r = run('validate', mp);
+  assert.equal(r.code, 1);
+  assert.ok(JSON.parse(r.stdout).errors.some(e => e.includes('tier') && e.includes('medium')));
+});
+
 test('test 驗證:pass 無 evidence / unit 缺實跑計數 → exit 1(沒實跑不得報 pass)', () => {
   const m = fixture();
   m.specs['spec-4'].status = 'produced';
