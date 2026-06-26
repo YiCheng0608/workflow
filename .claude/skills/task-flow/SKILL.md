@@ -14,10 +14,13 @@ description: >-
 把一個需求交給通用任務引擎完整跑完。task-flow 只管入口協調，不做任務實作、不拆任務、
 不決定 routing。
 
+進入完整流程前先做一次輕量 preflight triage。完整 task-flow 適合多階段、跨邊界、
+需要驗證地圖或需要 commit / teardown 收尾的需求；明確單步任務不進完整流程。
+
 ## 會用到的工具
 
 - `worktree-setup`: 需要隔離工作區時建立或重用 worktree，回傳 `path` / `branch` / `scope`
-- `orchestrator`: 在目標 worktree 內跑 `intake → human gate → worker/reviewer → test → done/halt`
+- `orchestrator`: 在目標 worktree 內跑 `intake → human gate → worker/review-map → test → done/halt`
 - `auto-commit`: 只在 orchestrator `done` 後，且需要本地 commit 時使用
 - `worktree-teardown`: 只在 commit 成功後，或使用者明確要求清理時使用
 
@@ -42,13 +45,18 @@ description: >-
 
 ## 流程
 
-1. 如果使用者指定在目前工作樹直接跑，或已經在含 `orchestrator/manifest.json` 的 task worktree，就直接跑 orchestrator。
-2. 否則先用 `worktree-setup` 建立或重用隔離 worktree，再在回傳的 `path` 內跑 orchestrator。
-3. 若 `orchestrator/manifest.json` 已存在，視為唯一事實來源並續跑；若不存在，就把原始需求交給 orchestrator 進 intake。
-4. orchestrator 回 `clarify` 時，原樣轉問使用者，拿到答覆後再 resume。
-5. 遇到 human gate 時，先讓使用者看 intake analysis / tasks / verification map，特別是 `no-judge` 項目，再依明確同意 resume。
-6. orchestrator 回 `done` 後，若需要本地 commit，就在同一個 worktree 內呼叫 `auto-commit`；commit 成功且不需立刻續修時，可再呼叫 `worktree-teardown`。
-7. orchestrator 回 `halt` 時，停止並回報 reason 與相關路徑。
+1. **preflight triage**:判斷是否值得啟動完整 task-flow。
+   - 不進完整流程:單檔或少量明確修改、單一 bug、單一指令查證、單純 commit / worktree / PR / deploy 動作、或使用者明確要求「直接做」。
+   - 進完整流程:跨多檔或多階段、需求尚需拆解、驗收方式需要人類 gate 接受、涉及多個 ownership、需要隔離 worktree + commit + teardown 串接。
+   - 使用者明確要求即使小任務也跑完整流程時照跑,但要在 gate 摘要揭露執行成本較高。
+2. 若 preflight 判定不進完整流程,停止 task-flow,改由呼叫端直接執行該單步任務或單一 worker;不要建立 manifest。
+3. 如果使用者指定在目前工作樹直接跑，或已經在含 `orchestrator/manifest.json` 的 task worktree，就直接跑 orchestrator。
+4. 否則先用 `worktree-setup` 建立或重用隔離 worktree，再在回傳的 `path` 內跑 orchestrator。
+5. 若 `orchestrator/manifest.json` 已存在，視為唯一事實來源並續跑；若不存在，就把原始需求交給 orchestrator 進 intake。
+6. orchestrator 回 `clarify` 時，原樣轉問使用者，拿到答覆後再 resume。
+7. 遇到 human gate 時，先讓使用者看 intake analysis / tasks / verification map / review map，特別是 `no-judge` 與降級審查項目，再依明確同意 resume。
+8. orchestrator 回 `done` 後，若需要本地 commit，就在同一個 worktree 內呼叫 `auto-commit`；commit 成功且不需立刻續修時，可再呼叫 `worktree-teardown`。
+9. orchestrator 回 `halt` 時，停止並回報 reason 與相關路徑。
 
 ## 共同規則
 
@@ -60,8 +68,10 @@ description: >-
 ## 何時停下問使用者
 
 - 缺少會影響 worktree / commit 目標的關鍵資訊
+- preflight 判定不值得完整 task-flow,但使用者要求的語意可能是「仍要完整自動化」
 - orchestrator 回 `clarify` / `halt`
 - 使用者要求跳過 intake、人類 gate、reviewer、或可機器驗的真 test
+- 使用者要求略過 intake 核准的 review map 或自動升級規則
 - auto-commit 或 teardown 硬拒絕
 - 需要 push、PR、deploy，或其他對外動作
 
@@ -79,6 +89,7 @@ description: >-
 ## 自檢
 
 - 已使用隔離 worktree，或明確遵循使用者要求的目前工作樹
+- 已先做 preflight triage;若未進完整流程,沒有建立 manifest 或 worktree
 - `scope` 已被後續 auto-commit / journal 沿用
 - `orchestrator` 是唯一寫 manifest 狀態與決定下一步的站
 - commit 只在 orchestrator `done` 後發生

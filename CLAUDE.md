@@ -6,9 +6,9 @@
 
 一個**與任務類型無關的通用任務引擎**:**manifest(磁碟上的唯一事實來源)+ `cli.js`(I/O adapter)+ `decide.js`(純函數決策)**。引擎不認得任何任務領域,只讀 manifest 通用欄位、照 `depends_on` 圖與旗標確定性推進。orchestrator 讀 manifest、呼叫 `cli.js`、派工收結果;實際工作交給三個 subagent 角色(非引擎的一部分):
 
-- **intake** — 拆需求成任務清單 + 驗證地圖,過**人類 gate** 後凍結成 manifest。整條流程唯一的動態步驟。
+- **intake** — 拆需求成任務清單 + 驗證地圖 + review map,過**人類 gate** 後凍結成 manifest。整條流程唯一的動態步驟。
 - **worker** — 執行單一任務節點、產出成品;**不得私自再拆解**(要重拆的唯一路是退回重 intake)。
-- **reviewer** — 對著需求原文審 worker 產出,採對抗式 framing;不代改、不碰 manifest、不決定 routing。
+- **reviewer** — 依 review map 對著需求原文審 worker 產出,採對抗式 framing;不代改、不碰 manifest、不決定 routing。
 
 一句話:**動態生計畫、靜態跑計畫** —— intake 依需求現生 manifest 過人類 gate,凍結後全由引擎照旗標確定性推進;能機器驗的節點實跑 test,無客觀裁判的誠實標記。
 

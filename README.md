@@ -4,7 +4,7 @@
 
 > 動態生計畫、靜態跑計畫。
 
-`intake` 依使用者需求現場拆出任務清單與驗證地圖,經過人類 gate 後凍結成 `manifest`;之後由 `orchestrator` 只照 `manifest`、`cli.js` 與 `decide.js` 的確定性結果推進。引擎不認得任務領域,只認通用欄位、依賴圖與狀態旗標。
+`intake` 依使用者需求現場拆出任務清單、驗證地圖與 review map,經過人類 gate 後凍結成 `manifest`;之後由 `orchestrator` 只照 `manifest`、`cli.js` 與 `decide.js` 的確定性結果推進。引擎不認得任務領域,只認通用欄位、依賴圖與狀態旗標。
 
 完整設計原理見 [docs/design-notes/generic-recursive-task-engine.md](docs/design-notes/generic-recursive-task-engine.md)。README 只整理目前流程與日常操作入口。
 
@@ -29,16 +29,17 @@
      - `orchestrator/intake-tasks.md`
      - `orchestrator/intake-verification.md`
    - 驗證地圖逐任務標記 `machine` 或 `no-judge`。
+   - review map 逐任務標記 `full` / `focused` / `defer-until-signal` 與升級條件。
 
 4. **人類 gate**
-   - 使用者檢查 intake 的分析書、任務清單與驗證地圖。
+   - 使用者檢查 intake 的分析書、任務清單、驗證地圖與 review map。
    - 重點不是只確認「要做哪些任務」,也要確認「接受哪些任務沒有客觀裁判」。
    - 沒有使用者明確同意,不得自行 approve。
 
 5. **凍結 manifest 後靜態執行**
    - orchestrator 每輪只問 `cli.js next` 或 `cli.js next-all`。
    - `produce` action 派 worker 做單一任務節點。
-   - 每個 worker 產出都要先過 reviewer,reviewer 只挑錯、不代改、不碰 manifest。
+   - 每個 worker 產出依 review map 走完整 reviewer、聚焦 reviewer,或在低風險且有可靠機器驗證時延後到升級訊號出現。
    - `test` action 必須透過 `cli.js test` 記回真實測試證據。
    - worker 不得私自再拆任務;要重拆只能退回重 intake,且再次經過人類 gate。
 
@@ -80,8 +81,8 @@
 | 元件 | 職責 |
 |---|---|
 | `task-flow` | 對使用者需求的外層入口;決定是否建 worktree、呼叫 orchestrator、處理 human gate、完成後視需要 commit / teardown。 |
-| `orchestrator` | 通用任務引擎編排器;讀 `orchestrator/manifest.json`,呼叫 `cli.js`,派 worker / reviewer,記回 produce / test 結果。 |
-| `intake` | 動態規劃角色;把需求拆成扁平任務清單、依賴與驗證地圖。 |
+| `orchestrator` | 通用任務引擎編排器;讀 `orchestrator/manifest.json`,呼叫 `cli.js`,派 worker / reviewer,依 review map 記回 produce / test 結果。 |
+| `intake` | 動態規劃角色;把需求拆成扁平任務清單、依賴、驗證地圖與 review map。 |
 | `worktree-setup` | 建立或重用隔離 git worktree 與 `<type>/<scope>` 分支。 |
 | `auto-commit` | 在目前分支建立本地 Conventional Commit;可把過程紀錄發到 `journal/<scope>`。 |
 | `worktree-teardown` | 安全移除隔離 worktree;用 `git status` 扣掉 `orchestrator/` 過程噪音判斷是否可移除。 |

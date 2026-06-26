@@ -16,7 +16,7 @@
 
 subagent 角色只有邊界語意:
 
-- **intake**:解析使用者需求、拆解任務、指定每個任務的驗證方式,產出「分析書 + 任務清單 + 驗證地圖」。這是整條流程唯一的動態規劃站。
+- **intake**:解析使用者需求、拆解任務、指定每個任務的驗證方式與審查深度,產出「分析書 + 任務清單 + 驗證地圖 + review map」。這是整條流程唯一的動態規劃站。
 - **worker**:執行單一任務節點、產出成品;不得私自再拆解任務。
 - **reviewer**:對著使用者原始需求與 worker 產出挑錯;不代改、不碰 manifest、不決定 routing。
 
@@ -26,7 +26,7 @@ subagent 角色只有邊界語意:
 2. agent reviewer 先過一遍 `intake` 產出,清掉 agent 抓得到的錯。
 3. **人類 gate**:使用者檢查 `intake` 產出,同意後 orchestrator 才開始派工。
 4. orchestrator 照任務清單,把各任務派給 worker subagent。
-5. 每個 worker 產出後,另一個 reviewer subagent 對著「使用者原始需求 + 該任務描述 + worker 產出」審。
+5. 每個 worker 產出後,依 human gate 核准的 review map 執行 full / focused reviewer,或在低風險且有可靠機器驗證時延後到升級訊號出現再審。
 6. 能機器驗的任務(前端 e2e、功能 unit、後端 unit / 整合、真 API…)實跑真測試驗;無法機器驗的任務標記為「無客觀裁判」。
 7. reviewer 若在審某任務時發現「分析書 / 任務清單本身有問題」(可能整批關聯任務都錯),退回重 `intake`。
 8. 任務清單全綠 = 完成。
@@ -59,13 +59,23 @@ subagent 角色只有邊界語意:
 
 ## 六、人類 gate 的審查重點
 
-人類 gate 要同時審查任務覆蓋與驗證地圖;其中驗證地圖是最容易被忽略、也最高槓桿的部分。對每個任務確認:
+人類 gate 要同時審查任務覆蓋、驗證地圖與 review map;其中驗證地圖與 review map 是最容易被忽略、也最高槓桿的部分。對每個任務確認:
 
 > 此任務的完成判準,是一個碰得到現實的裁判(會跑的 e2e / unit / 整合 / 真 API),還是僅由 agent 主觀判定「看起來對」?
 
-做法:`intake` 為每個任務附一欄「驗證方式」,gate 呈現給人的即此表。人確認的不僅是「要執行這些任務」,而是「接受其中哪些任務沒有客觀裁判」。驗證地圖決定系統接觸現實的表面積,且其品質無法自動驗證,故須由人把關。
+做法:`intake` 為每個任務附一欄「驗證方式」與一欄「審查深度」。人確認的不僅是「要執行這些任務」,而是「接受其中哪些任務沒有客觀裁判、哪些任務先延後 reviewer、哪些訊號會自動升級」。驗證地圖決定系統接觸現實的表面積,review map 決定 agent 主觀審查的投入位置;兩者品質都無法自動驗證,故須由人把關。
 
-## 七、邊界:扁平與遞迴
+## 七、成本感知審查
+
+審查深度由 intake 產出的 review map 決定,並經人類 gate 凍結:
+
+- **full**:完整 reviewer,用於高風險、`no-judge`、跨模組 / 權限 / 資料遷移 / 發佈、需求含糊、或失敗重做的節點。
+- **focused**:聚焦 reviewer,用 worker handoff summary 作索引,但仍必須讀使用者原文、任務描述並抽查實際 outputs / diff / 測試證據。
+- **defer-until-signal**:只用於低風險、output ownership 清楚、`requires_test:true` 且有可靠機器驗證的節點。出現 test fail、evidence 不足、outputs 越界、`last_failure` 非空或實際範圍擴大時,自動升級為 full。
+
+worker 的 handoff summary 只能降低 reviewer 找資料的成本,不能作為事實來源。成本控制不得取代人類 gate 或可機器驗的真 test。
+
+## 八、邊界:扁平與遞迴
 
 本設計以「扁平 + worker 不得私自再拆解」迴避一整類問題。若改為允許 worker 自行再拆解(每多一層,離現實的錨越遠且無人類 gate),下列引擎機制將失效,須於實作前先處理:
 

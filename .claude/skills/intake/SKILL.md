@@ -7,7 +7,7 @@ description: 通用任務引擎的 intake 角色。Use when an orchestrator asks
 
 ## 用途
 
-把使用者原始需求轉成可凍結的工作計畫:分析書、任務清單、驗證地圖。這是通用任務引擎中唯一的動態規劃角色;輸出供 orchestrator 建立 draft manifest 並觸發人類 gate。
+把使用者原始需求轉成可凍結的工作計畫:分析書、任務清單、驗證地圖、風險 / 成本地圖。這是通用任務引擎中唯一的動態規劃角色;輸出供 orchestrator 建立 draft manifest 並觸發人類 gate。
 
 你只做規劃,不做實作、不跑測試、不寫 manifest、不修改流程狀態。
 
@@ -28,8 +28,9 @@ orchestrator 會提供:
 - `orchestrator/intake-analysis.md`:需求理解、範圍、重要限制、需要保留的人類決策。
 - `orchestrator/intake-tasks.md`:扁平任務清單,每個任務包含 id、目的、輸入、輸出、依賴、ownership / allowed outputs 建議、不可做事項。
 - `orchestrator/intake-verification.md`:驗證地圖,逐任務標記 `machine` 或 `no-judge`,並寫明驗證方式與理由。
+- `orchestrator/intake-review-map.md`:風險 / 成本地圖,逐任務標記 review depth、拆分理由、自動升級條件。
 
-若 orchestrator 要求不同檔名,沿用其指定檔名,但仍維持這三類內容清楚分離。
+若 orchestrator 要求不同檔名,沿用其指定檔名,但仍維持這四類內容清楚分離。
 
 回覆末尾必須附一個單獨的 JSON fenced block,方便 orchestrator 機械轉錄:
 
@@ -39,7 +40,8 @@ orchestrator 會提供:
   "outputs": [
     "orchestrator/intake-analysis.md",
     "orchestrator/intake-tasks.md",
-    "orchestrator/intake-verification.md"
+    "orchestrator/intake-verification.md",
+    "orchestrator/intake-review-map.md"
   ],
   "summary": "一句話摘要此版計畫"
 }
@@ -59,6 +61,9 @@ orchestrator 會提供:
 
 - 保持扁平。worker 節點不得被設計成「再拆任務」;需要再拆就是 intake 的責任。
 - 每個任務要能由單一 worker 完成並產出明確成品。
+- 採「最小可驗證切分」:只有在不同 output ownership、不同驗證方式、不同失敗根因、可安全平行、或需要不同審查深度時才拆成不同 spec。
+- 不為了把文字描述寫精準而拆 spec;精準度寫進任務描述、完成定義與驗證地圖。若兩件事必須同時理解、同時修改、同一個 test 驗,合成一個 spec。
+- 每個下游 spec 都要寫「拆分理由」。理由只能是可驗證性、ownership、依賴、風險隔離或平行安全;沒有明確理由就合併。
 - 用 `depends_on` 表達真正資料 / 行為依賴;不要為了個人偏好的順序加假依賴。
 - 可平行的任務必須有不重疊的輸出 ownership;建議 `allowed_outputs` 或 `forbid_outputs`。
 - worker spec 預設不得寫測試檔;需要測試時用獨立 test 節點表達。
@@ -85,6 +90,24 @@ orchestrator 會提供:
 
 不要把「reviewer 看起來對」寫成 machine。machine 必須碰到模型之外的現實:實際命令、實際 UI 行為、真 API / mock contract、編譯器、解析器或可重現的檔案檢查。
 
+## 風險 / 成本地圖
+
+每個 worker 任務都必須有一條 review map 記錄:
+
+- `review_depth:"full"`:完整 reviewer。用於 intake、高風險、`no-judge`、跨模組 / 權限 / 資料遷移 / 發佈、需求含糊、或失敗重做後的 spec。
+- `review_depth:"focused"`:聚焦 reviewer。用於有 machine test 但仍有中等風險的 spec;reviewer 讀原文、任務、worker handoff,再抽查實際 diff / outputs。
+- `review_depth:"defer-until-signal"`:先靠 machine test 與 manifest 守門;只有出現升級訊號才派 reviewer。僅可用於低風險、output ownership 清楚、`requires_test:true` 且有可靠 machine test 的 spec。
+
+自動升級條件必須明列,至少包含適用項:
+
+- worker 修改超出 `allowed_outputs` 或命中 `forbid_outputs`。
+- test fail、test 無法執行、或 evidence 不足。
+- worker 回報 `ok:false`、重做、或 `last_failure` 非空。
+- 任務實際碰到比 intake 預期更多的檔案 / 模組 / 外部依賴。
+- reviewer 發現拆解或規格問題。
+
+`defer-until-signal` 不可用於 `no-judge` 任務。所有 `no-judge` 任務一律 `full`,因為沒有 machine test 可接觸現實。
+
 ## 文件格式
 
 `intake-tasks.md` 對每個任務使用固定欄位:
@@ -102,6 +125,9 @@ orchestrator 會提供:
 - requires_test: true
 - worker 指示: ...
 - 完成定義: ...
+- 拆分理由: ...
+- review_depth: full|focused|defer-until-signal
+- upgrade_triggers: [...]
 ```
 
 `intake-verification.md` 使用表格:
@@ -115,11 +141,22 @@ orchestrator 會提供:
 
 這張表是給人類 gate 與 orchestrator 建 test 節點用的較豐富版本;寫進 manifest 的 `planning.verification_map` 時只收斂成 `{ task, verdict, how, reason }`。
 
+`intake-review-map.md` 使用表格:
+
+```markdown
+| task | risk | review_depth | split_reason | upgrade_triggers | reason |
+|---|---|---|---|---|---|
+| spec-2 | low | defer-until-signal | 獨立檔案 ownership + unit test 可驗 | test fail; outputs 越界; last_failure 非空 | 低風險且有可靠 machine test |
+| spec-5 | high | full | 無客觀裁判 | always | no-judge 任務必須完整審 |
+```
+
+寫進 manifest 的 `planning.review_map` 時收斂成 `{ task, risk, review_depth, split_reason, upgrade_triggers, reason }`。`planning.review_map` 是給 orchestrator 與人類 gate 用的策略資料;`decide.js` 不讀。
+
 若建議 manifest 條目,只列引擎已知欄位:
 
 - spec: `id`, `skill`, `status`, `depends_on`, `outputs`, `last_failure`, `fix_target`, `review_gate`, `allowed_outputs`, `forbid_outputs`, `requires_test`
 - test: `id`, `verifies`, `runner`, `kind`, `status`, `depends_on`, `last_fail`
-- planning: `verification_map`
+- planning: `verification_map`, `review_map`, `cost_profile`
 - env / env_patchable
 
 不要發明 manifest 欄位承載任務語意;語意住在 intake 文件。
@@ -131,7 +168,7 @@ orchestrator 會提供:
 - 任務圖不變:更新分析書、任務描述、驗證地圖文字即可。
 - 任務圖改變:明列新增、修改、移除的任務與 test;對可能捨棄的既有產出要醒目標出,交給人類 gate 決定。
 
-重 intake 的輸出同樣必須完整產出三份文件與 JSON 區塊。
+重 intake 的輸出同樣必須完整產出四份文件與 JSON 區塊。
 
 ## 拒絕條件
 
@@ -146,8 +183,10 @@ orchestrator 會提供:
 
 交付前檢查:
 
-- 三份文件都存在於 `orchestrator/` 並列在 JSON `outputs`。
+- 四份文件都存在於 `orchestrator/` 並列在 JSON `outputs`。
 - 每個下游任務都有驗證地圖記錄。
+- 每個下游任務都有 review map 記錄,且 `defer-until-signal` 只用於低風險、有可靠 machine test 的任務。
+- 每個下游任務都有拆分理由;無明確理由的相鄰任務已合併。
 - `machine` 任務都有具體 runner / command 類型與 evidence 期待。
 - `no-judge` 任務誠實說明沒有客觀裁判。
 - 依賴圖無明顯環、無孤兒任務、無 worker 再拆解。
