@@ -24,6 +24,8 @@ description: 與任務類型無關的通用任務引擎編排器。讀磁碟上�
 3. 把結果寫回 manifest
 4. 重複,直到 `done` 或 `halt`
 
+`done` 只代表 manifest 任務圖已全數 verified。若呼叫端需要在完成後做本地 commit、journal 發佈或移除隔離 worktree,那是 `task-flow` 的 done 後收尾責任,不是 orchestrator 或通用引擎的 routing 節點。
+
 ## 鐵則
 
 - **唯一事實來源是 manifest 檔**,不是你的記憶;每次決策前重讀它。
@@ -46,6 +48,7 @@ description: 與任務類型無關的通用任務引擎編排器。讀磁碟上�
 
 - 使用者只要單獨做某一件事 → 直接委派一個 worker subagent
 - 使用者要你憑感覺決定任務順序 → 順序由 manifest 的 `depends_on` + `cli.js` 決定
+- 使用者要「完整入口流程」含隔離 worktree、commit 或 teardown → 使用 `task-flow`;orchestrator 只跑 manifest 到 `done` / `halt` / `clarify`
 
 ## 路徑約定(先讀這段,後面所有指令都用這些變數)
 
@@ -84,7 +87,7 @@ node "$SKILL_DIR/scripts/cli.js" validate $MANIFEST                       # boot
 | `{"type":"produce","spec":"spec-2"}` | 該產出/重做這個 spec | 派它的 worker(`spec.skill` 是角色),依 review map 完成 produce 前審查或合法 defer,然後 `cli.js produce` |
 | `{"type":"test","test":"test-x","spec":"spec-2"}` | 該驗這個 test | 依 `test.runner` 委派對應測試 worker,然後 `cli.js test` |
 | `{"type":"clarify","spec"\|"test":"…","question":"…","kind":"requirement\|environment\|oscillation\|review"}` | 需要使用者介入,不可自動推進。`kind:"environment"` 帶 `test`(掛在跑不起來的 test);其餘帶 `spec`。`kind:"review"` 不是失敗,是人類 gate(見處理步驟 review 段) | 停下把 `question` 問使用者;拿到答覆後寫 `answer.json` → `cli.js resume $MANIFEST <回傳的 spec 或 test> answer.json`,再回主迴圈 |
-| `{"type":"done"}` | 全部 verified | 停止,向使用者交付成品 |
+| `{"type":"done"}` | 全部 verified | 停止,把 `done` 回交呼叫端;若是由 `task-flow` 呼叫,後續 commit / teardown 由 `task-flow` 接手 |
 | `{"type":"halt","reason":"…"}` | 撞到安全護欄(maxTurns) | 停止,把 reason 原樣回報,不要硬幹 |
 
 `next-all`(批次)會印出:
@@ -114,7 +117,7 @@ node "$SKILL_DIR/scripts/cli.js" validate $MANIFEST                       # boot
    - **收結果,序列記回**:每個子代理回報後,你依它回報末尾的 JSON 區塊覆核轉錄(見「結果檔格式」)寫成一個 `result.json`,逐一 `cli.js produce` / `cli.js test` 記回——一個一個寫,不要平行寫。
    - `clarify` → 停下把 `question` 問使用者(不可自動重跑、不可臆測答案)。拿到答覆後寫 `answer.json`(`{ "answer": "<使用者答覆>", "reopen": "pending" }`;要保留原失敗脈絡讓 worker 針對性重做時用 `"failed"`)→ `cli.js resume $MANIFEST <clarify 回的 spec 或 test> answer.json` → 回第 2 步。(`kind:"environment"` 回的是 `test`,resume 後只重跑該 test、不重做任何 spec;其餘回的是 `spec`。)
      - **`kind:"review"`(人類 gate)是 clarify 的特例,不是失敗**:該 spec 宣告了 `review_gate: true`(本引擎用在 intake),引擎在它產出成功後停下,等使用者查看再繼續。你要把 clarify 裡列的產出檔路徑與重點摘要——**尤其是驗證地圖與 review map**——給使用者,討論到他明確表態。同意續跑 → `answer.json` 寫 `{ "approve": true }` → `cli.js resume`(spec 不重做、直接進 produced/verified);要求修改 → 寫 `{ "answer": "<修改意見>" }` → `cli.js resume`(reopen 重做,意見成為修補指示),重做成功後引擎再次 gate,直到使用者同意。沒有使用者明確同意,`approve` 不合法,嚴禁自行寫 `{"approve":true}` 跳過人類 gate。
-   - `done` → 結束,交付。
+   - `done` → 結束,把 `done` 回交呼叫端。不要在 orchestrator 內自行 commit / teardown;若本輪是由 `task-flow` 啟動,由 task-flow 的收尾策略接手。
    - `halt` → 結束,回報 reason(達回合上限 maxTurns)。
 4. **立即回到第 2 步**(同一回合內接續);回合只在 `done` / `halt` / `clarify` 三種 action 上結束(`clarify` 不是終局,`resume` 後續跑)。
 
@@ -269,3 +272,4 @@ test 結果(兩個正交軸 `altitude` + `blame`):
 - 委派 `test` 時依 `test.runner` 選對測試 worker,能機器驗的節點都實跑(非以 reviewer 主觀判定取代)
 - 全程只在 `clarify` / `done` / `halt` 三種停點結束過回合
 - 收到 `done` 時所有 spec 皆為 `verified`;收到 `halt` 時已把 reason 原樣回報、未強行續跑
+- 收到 `done` 時未自行執行 commit / teardown;需要收尾時已交回 `task-flow`

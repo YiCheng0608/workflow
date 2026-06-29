@@ -2,7 +2,7 @@
 name: task-flow
 description: >-
   通用任務引擎的入口流程。負責決定是否建立/重用隔離 worktree、呼叫 orchestrator、
-  在 clarify / human gate 時轉問使用者，並在 done 後視需要做本地 commit 與 teardown。
+  在 clarify / human gate 時轉問使用者，並在 done 後依收尾策略做本地 commit 與 teardown。
   不適用於單一步驟編輯、獨立 commit、獨立 worktree、push、PR、deploy，或任何要繞過
   intake、人類 gate、reviewer、真 test 的流程。
 ---
@@ -21,7 +21,7 @@ description: >-
 
 - `worktree-setup`: 需要隔離工作區時建立或重用 worktree，回傳 `path` / `branch` / `scope`
 - `orchestrator`: 在目標 worktree 內跑 `intake → human gate → worker/review-map → test → done/halt`
-- `auto-commit`: 只在 orchestrator `done` 後，且需要本地 commit 時使用
+- `auto-commit`: 只在 orchestrator `done` 後，且收尾策略要求本地 commit 時使用
 - `worktree-teardown`: 只在 commit 成功後，或使用者明確要求清理時使用
 
 ## 不做的事
@@ -38,8 +38,8 @@ description: >-
 - 目標 repo / worktree，預設目前工作目錄
 - `commitType` 與 `scope`
 - `base` 分支（可選）
-- 是否要 commit
-- 是否要 teardown
+- 是否要 commit（未指定時:隔離 worktree 預設要 commit；目前工作樹預設不要自動 commit）
+- 是否要 teardown（未指定時:本 flow 建立 / 重用的隔離 worktree 在 commit 成功後預設 teardown；目前工作樹預設不 teardown）
 
 若需要建立 worktree 或 commit，但 `commitType` / `scope` 缺少，就先用保守方式推短 scope；推不出來才問使用者。
 
@@ -50,13 +50,22 @@ description: >-
    - 進完整流程:跨多檔或多階段、需求尚需拆解、驗收方式需要人類 gate 接受、涉及多個 ownership、需要隔離 worktree + commit + teardown 串接。
    - 使用者明確要求即使小任務也跑完整流程時照跑,但要在 gate 摘要揭露執行成本較高。
 2. 若 preflight 判定不進完整流程,停止 task-flow,改由呼叫端直接用一般工具完成該單步任務;不要建立 manifest。
-3. 如果使用者指定在目前工作樹直接跑，或已經在含 `orchestrator/manifest.json` 的 task worktree，就直接跑 orchestrator。
-4. 否則先用 `worktree-setup` 建立或重用隔離 worktree，再在回傳的 `path` 內跑 orchestrator。
-5. 若 `orchestrator/manifest.json` 已存在，視為唯一事實來源並續跑；若不存在，就把原始需求交給 orchestrator 進 intake。
-6. orchestrator 回 `clarify` 時，原樣轉問使用者，拿到答覆後再 resume。
-7. 遇到 human gate 時，先讓使用者看 intake analysis / tasks / verification map / review map，特別是 `no-judge` 與降級審查項目，再依明確同意 resume。
-8. orchestrator 回 `done` 後，若需要本地 commit，就在同一個 worktree 內呼叫 `auto-commit`；commit 成功且不需立刻續修時，可再呼叫 `worktree-teardown`。
-9. orchestrator 回 `halt` 時，停止並回報 reason 與相關路徑。
+3. 決定收尾策略:
+   - 在目前工作樹直接跑:預設 `commit:false`、`teardown:false`。
+   - 由本 flow 建立 / 重用隔離 worktree:預設 `commit:true`、`teardown:true`。
+   - 續跑既有 task worktree（已有 `orchestrator/manifest.json`，且不是使用者明確指定的目前工作樹直跑）:視為隔離 worktree，預設 `commit:true`、`teardown:true`；commit context 缺失時可依 `auto-commit` 契約從當前分支 `<type>/<scope>` 回退推得。
+   - 使用者明確指定 `commit` / `teardown` 時照指定值；`teardown:true` 仍須通過 `worktree-teardown` 的未提交工作防護。
+4. 如果使用者指定在目前工作樹直接跑，或已經在含 `orchestrator/manifest.json` 的 task worktree，就直接跑 orchestrator。
+5. 否則先用 `worktree-setup` 建立或重用隔離 worktree，再在回傳的 `path` 內跑 orchestrator。
+6. 若 `orchestrator/manifest.json` 已存在，視為唯一事實來源並續跑；若不存在，就把原始需求交給 orchestrator 進 intake。
+7. orchestrator 回 `clarify` 時，原樣轉問使用者，拿到答覆後再 resume。
+8. 遇到 human gate 時，先讓使用者看 intake analysis / tasks / verification map / review map，特別是 `no-judge` 與降級審查項目，再依明確同意 resume。
+9. orchestrator 回 `done` 後，先執行收尾策略，不把 `done` 直接當整條 task-flow 的最終交付:
+   - `commit:true` → 在同一個 worktree 內呼叫 `auto-commit`，沿用 `worktree-setup` 回傳的 `scope` / `branch` 與 commit context；`orchestrator/` 過程產物只交給 journal，不進交付 commit。
+   - `commit:false` → 不呼叫 `auto-commit`；除非使用者明確要求，否則不 teardown，避免移除仍有未提交交付物的 worktree。
+   - auto-commit 硬拒絕 → 停下回報原因；只有使用者明示「本來無需 commit」後，才可把 commit 收尾視為成功並繼續後續 teardown 判斷。
+   - commit 成功且 `teardown:true` → 從主 checkout 或其他目錄呼叫 `worktree-teardown`；不要在要移除的 worktree 內執行 teardown。
+10. orchestrator 回 `halt` 時，停止並回報 reason 與相關路徑。
 
 ## 共同規則
 
@@ -64,6 +73,7 @@ description: >-
 - `scope` 以 `worktree-setup` 回傳值為準，後續 commit / journal 必須沿用
 - `orchestrator/` 只放過程產物，交付 commit 不應包含它
 - 不另外建立 flow state 檔；可恢復狀態以 worktree + branch + manifest 為準
+- orchestrator 的 `done` 只是任務圖完成；task-flow 的完成還包含本節收尾策略
 
 ## 何時停下問使用者
 
@@ -93,4 +103,4 @@ description: >-
 - `scope` 已被後續 auto-commit / journal 沿用
 - `orchestrator` 是唯一寫 manifest 狀態與決定下一步的站
 - commit 只在 orchestrator `done` 後發生
-- teardown 只在沒有未提交交付物時執行
+- teardown 只在 commit 成功或使用者明確確認無需 commit 後執行，且必須通過 `worktree-teardown` 的未提交工作防護

@@ -13,7 +13,6 @@ const manifest = {
     'spec-4': { id: 'spec-4', skill: 'api-contract',         status: 'pending', depends_on: ['spec-3'],             outputs: [], last_failure: null },
     'spec-5': { id: 'spec-5', skill: 'implementation',  status: 'pending', depends_on: ['spec-3', 'spec-4'],   outputs: [], last_failure: null, requires_test: true },
     'spec-6': { id: 'spec-6', skill: 'delivery-note',      status: 'pending', depends_on: ['spec-5'],             outputs: [], last_failure: null },
-    'spec-7': { id: 'spec-7', skill: 'auto-commit',          status: 'pending', depends_on: ['spec-6'],             outputs: [], last_failure: null },
   },
   // test↔spec 的對照表(方案 B):每個 test 標明它驗哪個 spec
   tests: {
