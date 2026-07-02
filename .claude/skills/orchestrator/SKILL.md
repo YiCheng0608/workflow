@@ -31,7 +31,7 @@ description: 與任務類型無關的通用任務引擎編排器。讀磁碟上�
 ## 鐵則
 
 - **唯一事實來源是 manifest 檔**,不是你的記憶;每次決策前重讀它。
-- **記回只接受引擎發派過的 action**:`next` / `next-all` 發派時把授權寫進 `orchestration.leases`,`produce` / `test` 沒有對應授權會被 exit 1 擋下。順序固定是「先問、再派、再記回」,不可先做完再補問。
+- **記回只接受引擎發派過的 action**:`next` / `next-all` 發派時把授權寫進 `orchestration.leases`,`produce` / `test` 沒有對應授權會被 exit 1 擋下。順序固定是「先問、再派、再記回」,不可先做完再補問。授權只在當輪有效:下一次發派會整批重發、作廢殘留,不可囤舊授權跨輪記回。
 - **routing 與平行度都不由你判斷**,一律來自 `cli.js next`(單一)或 `cli.js next-all`(批次)。`next-all` 的 `actions` 是 manifest `depends_on` 圖確定性算出的「此刻互相獨立、可同時跑」集合——平行多少 = 這一輪 `actions` 的大小,你不准自己讀 `depends_on` 去推。
 - **扁平:worker 不得私自再拆解任務**。需要重新拆解時,唯一的路是退回重 `intake`(reviewer 把 `blame` 指向 intake spec、`altitude:spec`);重 intake 一樣過人類 gate,不繞過人。
 - **不准手動編輯 manifest 狀態**。狀態一律只能透過 `cli.js produce` / `cli.js test` / `resume` 改。只有三種例外可碰結構/設定欄位:(a) bootstrap 第一次建立 draft manifest;(b) 引擎退回重 intake 後,新版任務清單需要受控更新 spec/test/planning 結構(見「重 intake 的結構修補」);(c) 使用者明確要求補做某個機器驗收時補一個 test 結構節點(見「補做機器驗收」)。新增節點只能以 `pending` 初始化,補完後由引擎自動排出來跑。

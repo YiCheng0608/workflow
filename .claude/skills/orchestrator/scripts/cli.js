@@ -51,23 +51,34 @@ function clearSignalsFor(signals, ...targets) {
 }
 
 // ── action lease(協議強制):引擎只接受「自己發派過的 action」記回。──────────────
-// next / next-all 每次都把「此刻 decideAll 授權的 action 集合」併進 orchestration.leases;
-// produce / test 記回前查驗授權存在,記回後消耗它(重做等新授權由記回後的 decideAll 重新算出)。
-// 這把「先問 next 再派工再記回」從 SKILL 自律變成引擎硬約束:繞過 next 私跑一站、或把沒發派過
-// 的結果塞回 manifest,都 exit 1(manifest 不動)。clarify / done / halt 不清既有授權:平行批次
-// 裡其他 in-flight worker 的結果仍可記回,不因某一項先觸發停點而作廢已做完的工作。
+// 發派(next / next-all 回 produce / test / batch)= 新一輪的開始:leases 整批重發成
+// 「此刻 decideAll 授權的集合」,上一輪殘留、已不再被授權的 lease 一併作廢——依「先問、
+// 再派、再記回」協議,呼叫 next / next-all 時上一批結果都已記回,沒有 in-flight worker
+// 依賴舊 lease,殘留授權只會變成繞過 next 的後門。記回(produce / test)前查驗授權存在、
+// 記回後消耗,並以 union 補進新授權:批次序列記回途中,其他 in-flight 成員的 lease 不被
+// 中途的狀態變化洗掉。clarify / done / halt 是停點不是發派:不重發、不清授權,平行批次裡
+// 其他 in-flight worker 的結果仍可記回,不因某一項先觸發停點而作廢已做完的工作。
 function leaseKey(a) {
   return a.type === 'produce' ? `produce:${a.spec}` : a.type === 'test' ? `test:${a.test}` : null;
+}
+function currentLeaseKeys(m) {
+  const keys = [];
+  for (const a of (decideAll(m, ctxOf(m)).actions || [])) {
+    const k = leaseKey(a);
+    if (k) keys.push(k);
+  }
+  return keys;
 }
 function refreshLeases(m, consumed) {
   const set = new Set((m.orchestration && m.orchestration.leases) || []);
   if (consumed) set.delete(consumed);
-  for (const a of (decideAll(m, ctxOf(m)).actions || [])) {
-    const k = leaseKey(a);
-    if (k) set.add(k);
-  }
+  for (const k of currentLeaseKeys(m)) set.add(k);
   m.orchestration = m.orchestration || {};
   m.orchestration.leases = [...set];
+}
+function reissueLeases(m) {
+  m.orchestration = m.orchestration || {};
+  m.orchestration.leases = currentLeaseKeys(m);
 }
 function requireLease(m, key) {
   const leases = (m.orchestration && m.orchestration.leases) || [];
@@ -268,12 +279,12 @@ if (!cmd || !manifestPath) {
   fail('用法: node cli.js <next|next-all|produce|test|resume> <manifest> [args]');
 }
 
-// ── next:讀狀態,印出「下一步該做什麼」(單一)。發派授權寫進 orchestration.leases,
-// 不動任何 spec / test 狀態;同樣的狀態重呼叫得到同樣的 action 與授權(冪等)。──────────
+// ── next:讀狀態,印出「下一步該做什麼」(單一)。發派時整批重發授權(作廢殘留),
+// 停點不動授權;不動任何 spec / test 狀態,同樣的狀態重呼叫得到同樣的 action 與授權(冪等)。──
 if (cmd === 'next') {
   const m = load(manifestPath);
   const r = decide(m, ctxOf(m));
-  refreshLeases(m);
+  if (r.type === 'produce' || r.type === 'test') reissueLeases(m);
   save(manifestPath, m);
   out(enrichDecision(m, r));
   process.exit(0);
@@ -286,7 +297,7 @@ if (cmd === 'next') {
 if (cmd === 'next-all') {
   const m = load(manifestPath);
   const r = decideAll(m, ctxOf(m));
-  refreshLeases(m);
+  if (r.type === 'batch') reissueLeases(m);
   save(manifestPath, m);
   out(enrichDecision(m, r));
   process.exit(0);

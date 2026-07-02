@@ -538,6 +538,19 @@ test('lease:produce 失敗 → 重做授權立即重發(不必先繞一趟 next)
   assert.ok(readJson(mp).orchestration.leases.includes('produce:spec-4'), 'failed → decideAll 重發重做授權');
 });
 
+test('lease:發派整批重發,上一輪殘留的過時授權作廢', () => {
+  const m = fixture();
+  // 殘留授權:spec-1 / spec-2 已 verified、test-unit 的 spec 還沒 produced,此刻都不該被授權
+  m.orchestration.leases = ['produce:spec-1', 'produce:spec-2', 'test:test-unit'];
+  const mp = writeJson('m.json', m);
+  let r = run('next', mp);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(readJson(mp).orchestration.leases, ['produce:spec-4'], '發派後 leases = 此刻 decideAll 授權的集合');
+  r = run('produce', mp, 'spec-1', writeJson('r.json', { ok: true, outputs: ['orchestrator/triage.md'], review: REVIEW }));
+  assert.equal(r.code, 1, '殘留的過時授權不得再用來記回');
+  assert.ok(r.err.includes('leases'));
+});
+
 test('lease:平行批次裡某項觸發停點,其他 in-flight 結果仍可記回', () => {
   const m = {
     specs: {
@@ -557,6 +570,11 @@ test('lease:平行批次裡某項觸發停點,其他 in-flight 結果仍可記�
   assert.deepEqual(readJson(mp).orchestration.leases.sort(), ['test:test-a', 'test:test-b']);
   r = run('test', mp, 'test-a', writeJson('r.json', { pass: false, altitude: 'environment', reason: 'runner 起不來' }));
   assert.equal(r.code, 0, r.err);
+  // 停點(clarify)不是發派:不重發、不清授權——test-b 的 in-flight 授權必須活過這次 next-all
+  r = run('next-all', mp);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out.type, 'clarify');
+  assert.ok(readJson(mp).orchestration.leases.includes('test:test-b'), '停點不得作廢 in-flight 授權');
   r = run('test', mp, 'test-b', writeJson('r.json', { pass: true, evidence: EV_PASS }));
   assert.equal(r.code, 0, '停點不作廢其他 in-flight 授權:' + (r.err || ''));
   assert.equal(readJson(mp).specs['spec-b'].status, 'verified');
