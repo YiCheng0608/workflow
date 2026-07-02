@@ -2,7 +2,8 @@
 name: task-flow
 description: >-
   通用任務引擎的入口流程。負責決定是否建立/重用隔離 worktree、呼叫 orchestrator、
-  在 clarify / human gate 時轉問使用者，並在 done 後依收尾策略做本地 commit 與 teardown。
+  讓測試前 runtime-preflight 準備依賴環境，在 clarify / human gate 時轉問使用者，
+  並在 done 後依收尾策略做本地 commit 與 teardown。
   不適用於單一步驟編輯、獨立 commit、獨立 worktree、push、PR、deploy，或任何要繞過
   intake、人類 gate、reviewer、真 test 的流程。
 ---
@@ -20,7 +21,8 @@ description: >-
 ## 會用到的工具
 
 - `worktree-setup`: 需要隔離工作區時建立或重用 worktree，回傳 `path` / `branch` / `scope`
-- `orchestrator`: 在目標 worktree 內跑 `intake → human gate → worker/review-map → test → done/halt`
+- `orchestrator`: 在目標 worktree 內跑 `intake → human gate → worker/review-map → runtime-preflight + test → done/halt`
+- `runtime-preflight`: 測試前準備 worktree 內 runtime 依賴投影,並只共享安全的 cache / store
 - `auto-commit`: 只在 orchestrator `done` 後，且收尾策略要求本地 commit 時使用
 - `worktree-teardown`: 只在 commit 成功後，或使用者明確要求清理時使用
 
@@ -29,6 +31,7 @@ description: >-
 - 不手寫 manifest 狀態
 - 不直接跑 worker
 - 不直接跑 test runner
+- 不直接安裝或共享 runtime 依賴;測試前環境準備交給 `runtime-preflight`
 - 不自行 approve human gate
 - 不做 push、PR、deploy 或任何 remote 操作
 
@@ -72,6 +75,7 @@ description: >-
 - `orchestrator/manifest.json` 是唯一事實來源
 - `scope` 以 `worktree-setup` 回傳值為準，後續 commit / journal 必須沿用
 - `orchestrator/` 只放過程產物，交付 commit 不應包含它
+- runtime 依賴目錄與 preflight metadata 是執行產物,不進交付 commit;共享 cache / store 只允許 package manager 管理的 immutable / 併發安全層
 - 不另外建立 flow state 檔；可恢復狀態以 worktree + branch + manifest 為準
 - orchestrator 的 `done` 只是任務圖完成；task-flow 的完成還包含本節收尾策略
 

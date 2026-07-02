@@ -10,7 +10,7 @@
 - **worker** — 執行單一任務節點、產出成品;**不得私自再拆解**(要重拆的唯一路是退回重 intake)。
 - **reviewer** — 依 review map 對著需求原文審 worker 產出,採對抗式 framing;不代改、不碰 manifest、不決定 routing。
 
-一句話:**動態生計畫、靜態跑計畫** —— intake 依需求現生 manifest 過人類 gate,凍結後全由引擎照旗標確定性推進;能機器驗的節點實跑 test,無客觀裁判的誠實標記。
+一句話:**動態生計畫、靜態跑計畫** —— intake 依需求現生 manifest 過人類 gate,凍結後全由引擎照旗標確定性推進;能機器驗的節點先做 runtime-preflight 再實跑 test,無客觀裁判的誠實標記。
 
 完整設計與設計原理見 [docs/design-notes/generic-recursive-task-engine.md](docs/design-notes/generic-recursive-task-engine.md)——**該筆記為唯一事實來源,本節僅作定位、不再展開**(避免與筆記漂移)。
 

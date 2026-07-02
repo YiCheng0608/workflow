@@ -10,7 +10,7 @@
 
 ## 目前流程
 
-標準入口是 `task-flow` skill。它負責把一個使用者需求交給整條流程,並在必要時協調隔離 worktree、orchestrator、commit 與 teardown。
+標準入口是 `task-flow` skill。它負責把一個使用者需求交給整條流程,並在必要時協調隔離 worktree、orchestrator、runtime preflight、commit 與 teardown。
 
 1. **建立或重用隔離工作區**
    - 預設用 `worktree-setup` 建立獨立 git worktree。
@@ -42,15 +42,20 @@
    - orchestrator 每輪只問 `cli.js next` 或 `cli.js next-all`。
    - `produce` action 派 worker 做單一任務節點。
    - 每個 worker 產出依 review map 走完整 reviewer、聚焦 reviewer,或在低風險且有可靠機器驗證時於 produce 前合法 defer。
-   - `test` action 必須透過 `cli.js test` 記回真實測試證據。
+   - `test` action 先依 `runtime-preflight` 準備 worktree 內 runtime 依賴投影,再實跑測試,並透過 `cli.js test` 記回真實測試證據。
    - worker 不得私自再拆任務;要重拆只能退回重 intake,且再次經過人類 gate。
 
-6. **停點**
+6. **測試前 runtime preflight**
+   - 每個 worktree 保留自己的可變執行投影,例如 `node_modules/`、`.venv/`、`vendor/`、`target/`。
+   - 只共享 package manager 管理的 immutable / 併發安全 cache 或 store,例如 pnpm store、pip / uv cache、Composer cache、Go module cache、Cargo cache、Docker layer。
+   - fingerprint 不只看 lockfile,也包含 runtime 版本、package manager 版本、OS / arch、native ABI 與 install flags。
+
+7. **停點**
    - `clarify`:需求、環境、震盪或人類 gate 需要使用者答覆。
    - `done`:全部 spec verified,流程完成。
    - `halt`:撞到安全護欄,停止並回報原因。
 
-7. **完成後收尾**
+8. **完成後收尾**
    - 需要 commit 時,`auto-commit` 在目前 worktree 產生本地 Conventional Commit。
    - 過程紀錄可發到孤兒分支 `journal/<scope>`,不混進交付分支。
    - 需要清理時,`worktree-teardown` 只在沒有未提交交付物時移除 worktree;預設保留 task 分支與 journal 分支。
@@ -67,6 +72,7 @@
 │       ├── orchestrator/
 │       ├── intake/
 │       ├── worktree-setup/
+│       ├── runtime-preflight/
 │       ├── auto-commit/
 │       └── worktree-teardown/
 ├── .agents/
@@ -86,6 +92,7 @@
 | `orchestrator` | 通用任務引擎編排器;讀 `orchestrator/manifest.json`,呼叫 `cli.js`,派 worker / reviewer,依 review map 記回 produce / test 結果。 |
 | `intake` | 動態規劃角色;把需求拆成扁平任務清單、依賴、驗證地圖與 review map。 |
 | `worktree-setup` | 建立或重用隔離 git worktree 與 `<type>/<scope>` 分支。 |
+| `runtime-preflight` | 測試前準備 worktree 內 runtime 依賴投影;只共享安全的 cache / store。 |
 | `auto-commit` | 在目前分支建立本地 Conventional Commit;可把過程紀錄發到 `journal/<scope>`。 |
 | `worktree-teardown` | 安全移除隔離 worktree;用 `git status` 扣掉 `orchestrator/` 過程噪音判斷是否可移除。 |
 
