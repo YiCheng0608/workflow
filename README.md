@@ -40,6 +40,36 @@
         └── generic-recursive-task-engine.md
 ```
 
+## 安裝
+
+在本 repo 內工作不需安裝,專案層 skills 直接生效。要在**自己的專案**裡使用這套流程,把 skills 裝進個人 skills 目錄即可,對所有專案生效,**不限定哪一種 agent**:
+
+```sh
+git clone <本 repo> ~/tools/automation
+cd ~/tools/automation
+./install.sh
+```
+
+`install.sh` 會出選單(↑↓ 移動、Enter 確認、q 取消)讓你依自己用的 agent 選擇安裝位置:
+
+| 目錄 | 誰會讀 |
+|---|---|
+| `~/.agents/skills/` | 跨 agent 通用約定:Codex、Gemini CLI、Cursor、opencode、Amp、Crush 等 |
+| `~/.claude/skills/` | Claude Code(它只讀自己的目錄) |
+
+symlink 指向本 clone,不存在第二份要同步的拷貝。其他行為:
+
+- **更新**:在 clone 目錄 `git pull` 即可,裝過的 agent 立刻吃到新版。
+- **兩種都用**:再跑一次選另一個位置即可(冪等,重跑安全)。
+- **移除**:`./install.sh --uninstall`,只刪指向本 repo 的 symlink,不動其他 skill。
+- **撞名保護**:目標位置已有同名檔案時警告並跳過,不覆蓋。
+- **其他 runtime / 非互動**:`./install.sh --target <dir>`(可重複)跳過選單直接裝進指定目錄。
+
+兩件事先知道:
+
+1. 本 repo 的 `CLAUDE.md` 只在本 repo 目錄內生效,**不會**影響你自己專案的 CLAUDE.md / AGENTS.md;skill 執行所需的規則全部自足於各 `SKILL.md`。
+2. 個人 skill 會覆蓋**同名**的專案 skill。本套 skill 名稱較通用(`intake`、`orchestrator`…),若你的專案已有同名 skill,安裝前請先確認。
+
 ## 主要元件
 
 | 元件 | 職責 |
