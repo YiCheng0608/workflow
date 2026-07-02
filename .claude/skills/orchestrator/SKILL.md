@@ -57,7 +57,7 @@ description: 與任務類型無關的通用任務引擎編排器。讀磁碟上�
 
 這個 skill 被叫起來時,harness 會告訴你它的 **base directory**(形如 `…/skills/orchestrator`)。以下用 `$SKILL_DIR` 代表它:
 
-- **CLI 腳本**:`$SKILL_DIR/scripts/cli.js`(同層還有 `sim.js`、`decide.js`,你只直接呼叫 `cli.js`)
+- **CLI 腳本**:`$SKILL_DIR/scripts/cli.js`(同層還有 `decide.js`,你只直接呼叫 `cli.js`)
 - **manifest 範本**:`$SKILL_DIR/references/manifest.example.json`(只讀的結構參考,不要改)
 - **工作用 manifest**:`orchestrator/manifest.json`(寫在使用者專案工作目錄下,不是 skill 目錄內)。下面用 `$MANIFEST` 代表它。
 - **需求原文**:`orchestrator/requirement.md`(bootstrap 時把使用者原始需求原封不動寫入)。所有 worker / reviewer 委派都帶這個路徑,避免靠 session 記憶或主 agent 轉述續跑。
@@ -186,7 +186,7 @@ worker handoff summary 只作導覽索引,不是事實來源。reviewer 的事�
    - `env` 依需求填(這次任務需要哪些執行期事實 / 設定就寫哪些);沒需要的欄位不臆造。
    - **寫出後、凍結前先跑 `cli.js validate $MANIFEST`**(`depends_on` / `verifies` / test `depends_on` 都指向存在的節點、依賴無環;`tier` 與 `review_map.review_depth` enum 合法;`review_map.task` 指向存在 spec;`review_map` 標 `defer-until-signal` 的 spec 必須 `requires_test:true` 且有 test verifies 它);回 `{ok:false,errors}` 就先修好再凍結——別把懸空參照、成環或無機器護欄的 defer manifest 丟進主迴圈,引擎不報錯,只會讓相關節點永遠不 ready 或靜默缺少現實接觸,難診斷。
 4. **記錄驗證地圖與 review map**:`manifest.planning.verification_map` 逐任務寫 `{ task, verdict:"machine"|"no-judge", how, reason }`;`manifest.planning.review_map` 逐任務寫 `{ task, risk, review_depth, split_reason, upgrade_triggers, reason }`。這些欄位純策略與人類可讀資料,不參與 `decide.js` 控制流。形狀見 `manifest.example.json` 的 `planning` 區塊。
-5. **記回 intake 產出以觸發人類 gate**:先跑 `cli.js next $MANIFEST` 讓引擎發派 intake 的 produce(沒發派過的記回會被擋),再寫一份 result.json,至少包含 `{ "ok": true, "outputs": ["orchestrator/intake.md", ...], "review": { "depth": "full", "record": "orchestrator/review-<intake spec id>.md" } }`(`record` = 第 1 步對抗式 reviewer 的結論檔,必須真的落盤),再跑 `cli.js produce $MANIFEST <intake spec id> result.json`。intake / `review_gate` spec 不可省略 outputs,因為 gate 必須把分析書、任務清單、驗證地圖與 review map 交給使用者看。
+5. **記回 intake 產出以觸發人類 gate**:先跑 `cli.js next $MANIFEST` 讓引擎發派 intake 的 produce(沒發派過的記回會被擋),再寫一份 result.json,至少包含 `{ "ok": true, "outputs": ["orchestrator/intake-analysis.md", ...], "review": { "depth": "full", "record": "orchestrator/review-<intake spec id>.md" } }`(`record` = 第 1 步對抗式 reviewer 的結論檔,必須真的落盤),再跑 `cli.js produce $MANIFEST <intake spec id> result.json`。intake / `review_gate` spec 不可省略 outputs,因為 gate 必須把分析書、任務清單、驗證地圖與 review map 交給使用者看。
 6. **人類 gate**:`review_gate:true` 的 intake spec 在產出後會被引擎標 `blocked(kind:'review')`,主迴圈收到 `kind:"review"` 的 clarify 時停下。把分析書、任務清單、**特別是驗證地圖與 review map**呈現給使用者——人確認的不只是「要做這些任務」,而是「**接受其中哪些任務沒有客觀裁判、哪些任務先延後 reviewer、哪些訊號會自動升級**」。同意 → resume `{approve:true}` 放行下游;要修改 → resume 帶意見重做 intake、再次 gate。
 
 過人類 gate 後 → 這一版 manifest 凍結 → 回到主迴圈第 2 步。
@@ -222,7 +222,7 @@ manifest 凍結後不可重新規劃,但使用者明確要求「現在補做某�
 produce 結果(三種):
 
 ```json
-{ "ok": true, "outputs": ["orchestrator/intake.md"], "review": { "depth": "full", "record": "orchestrator/review-spec-1.md" } }
+{ "ok": true, "outputs": ["orchestrator/intake-analysis.md"], "review": { "depth": "full", "record": "orchestrator/review-spec-1.md" } }
 ```
 
 - 這個 spec 自己產不出來、要重做它:`{ "ok": false, "reason": "...", "fix_target": "code" }`(或 `"spec"`)

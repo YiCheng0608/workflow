@@ -56,7 +56,7 @@ dependency projection 的 fingerprint 至少包含:
 - install mode:dev / production、optional deps、workspace filter、extra index、feature flags、環境變數
 - workspace 設定:`pnpm-workspace.yaml`、`.npmrc`、`.yarnrc.yml`、`pyproject.toml`、`composer.json` 等會影響 dependency graph 的檔案
 
-fingerprint 可以用檔案寫在 worktree 內的執行產物位置,例如 `.runtime-preflight/<runtime>.json`。這類檔案是過程 / cache metadata,不進交付 commit。
+fingerprint 可以用檔案寫在 worktree 內的過程產物約定目錄下,例如 `orchestrator/runtime-preflight/<runtime>.json`。這類檔案是過程 / cache metadata,不進交付 commit;必須放在 `orchestrator/` 底下,否則 `worktree-teardown` 會把它判成未提交工作而拒絕清理。
 
 ## Runtime 策略
 

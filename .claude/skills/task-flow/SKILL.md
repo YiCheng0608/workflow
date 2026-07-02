@@ -21,8 +21,7 @@ description: >-
 ## 會用到的工具
 
 - `worktree-setup`: 需要隔離工作區時建立或重用 worktree，回傳 `path` / `branch` / `scope`
-- `orchestrator`: 在目標 worktree 內跑 `intake → human gate → worker/review-map → runtime-preflight + test → done/halt`
-- `runtime-preflight`: 測試前準備 worktree 內 runtime 依賴投影,並只共享安全的 cache / store
+- `orchestrator`: 在目標 worktree 內跑 `intake → human gate → worker/review-map → runtime-preflight + test → done/halt`（測試前的 runtime 依賴準備由 orchestrator 依 `runtime-preflight` 處理,不是本 flow 的直接步驟）
 - `auto-commit`: 只在 orchestrator `done` 後，且收尾策略要求本地 commit 時使用
 - `worktree-teardown`: 只在 commit 成功後，或使用者明確要求清理時使用
 

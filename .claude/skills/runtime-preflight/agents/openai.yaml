@@ -1,4 +1,0 @@
-interface:
-  display_name: "Runtime Preflight"
-  short_description: "Prepare isolated runtime deps before tests"
-  default_prompt: "Use $runtime-preflight to prepare this worktree runtime before running machine tests."
