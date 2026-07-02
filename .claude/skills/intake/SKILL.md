@@ -25,7 +25,7 @@ orchestrator 會提供:
 
 在 `orchestrator/` 底下產出四份 Markdown:
 
-- `orchestrator/intake-analysis.md`:需求理解、範圍、重要限制、需要保留的人類決策。
+- `orchestrator/intake-analysis.md`:需求理解、範圍、重要限制、需要保留的人類決策、開放問題(見「開放問題」)。
 - `orchestrator/intake-tasks.md`:扁平任務清單,每個任務包含 id、目的、輸入、輸出、依賴、ownership / allowed outputs 建議、不可做事項。
 - `orchestrator/intake-verification.md`:驗證地圖,逐任務標記 `machine` 或 `no-judge`,並寫明驗證方式與理由。
 - `orchestrator/intake-review-map.md`:風險 / 成本地圖,逐任務標記 review depth、拆分理由、自動升級條件。
@@ -56,6 +56,16 @@ orchestrator 會提供:
   "fix_target": "spec"
 }
 ```
+
+## 開放問題
+
+需求歧義會改變任務圖、驗證方式或 output ownership 時,不要只挑一個假設寫進任務描述:在 `intake-analysis.md` 列「開放問題」,每題固定三欄:
+
+- 問題:一句可直接回答的問題。
+- 建議答案:你採用的保守假設。整份計畫必須照建議答案排,使用者全數接受建議時計畫即可原樣凍結。
+- 影響:答案不同時會變動的任務、驗證或 ownership。
+
+只列「答案會改變計畫」的問題;能用 `rg` 從 repo 查到答案的,自己查、不列。訪談由入口流程在人類 gate 逐題進行;偏離建議的答覆會以修改意見(問答紀錄)觸發重 intake。沒有歧義就不寫這節。
 
 ## 任務拆解規則
 
@@ -167,6 +177,7 @@ orchestrator 會提供:
 
 - 任務圖不變:更新分析書、任務描述、驗證地圖文字即可。
 - 任務圖改變:明列新增、修改、移除的任務與 test;對可能捨棄的既有產出要醒目標出,交給人類 gate 決定。
+- 修改意見含問答紀錄時:視為已決事項,照答案改計畫;已答的問題不得再列入開放問題。
 
 重 intake 的輸出同樣必須完整產出四份文件與 JSON 區塊。
 
@@ -174,7 +185,7 @@ orchestrator 會提供:
 
 在以下情況回 `ok:false`,不要硬排一份會誤導下游的計畫:
 
-- 缺少決定任務邊界或驗收方式的核心需求。
+- 缺少決定任務邊界或驗收方式的核心需求,且無法以建議答案排出可審的草案(排得出來就走開放問題,不拒絕)。
 - repo 脈絡不足以判斷應該碰哪些系統,且無法用保守假設安全前進。
 - 使用者要求繞過人類 gate、跳過可機器驗的測試、或讓 worker 自行再拆任務。
 - 需求本身互相矛盾,且不同解讀會導致不同任務圖。
@@ -185,6 +196,7 @@ orchestrator 會提供:
 
 - 四份文件都存在於 `orchestrator/` 並列在 JSON `outputs`。
 - 每個下游任務都有驗證地圖記錄。
+- 開放問題每題都有建議答案與影響範圍,計畫已照建議答案排;repo 可查的問題沒有列入。
 - 每個下游任務都有 review map 記錄,且 `defer-until-signal` 只用於低風險、有可靠 machine test 的任務;test 失敗會讓重做下一輪升級 full。
 - 每個下游任務都有拆分理由;無明確理由的相鄰任務已合併。
 - `machine` 任務都有具體 runner / command 類型與 evidence 期待。

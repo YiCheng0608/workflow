@@ -60,7 +60,7 @@ description: >-
 5. 否則先用 `worktree-setup` 建立或重用隔離 worktree，再在回傳的 `path` 內跑 orchestrator。
 6. 若 `orchestrator/manifest.json` 已存在，視為唯一事實來源並續跑；若不存在，就把原始需求交給 orchestrator 進 intake。
 7. orchestrator 回 `clarify` 時，原樣轉問使用者，拿到答覆後再 resume。
-8. 遇到 human gate 時，先讓使用者看 intake analysis / tasks / verification map / review map，特別是 `no-judge` 與降級審查項目，再依明確同意 resume。
+8. 遇到 human gate 時，先讓使用者看 intake analysis / tasks / verification map / review map，特別是 `no-judge` 與降級審查項目，再依明確同意 resume。若 analysis 列有開放問題，同意前先逐題訪談：一次只問一題並附 intake 的建議答案，使用者可隨時說「其餘照建議」。答案全數符合建議 → 直接依同意 resume；任一偏離 → 收齊全部答覆後，把問答紀錄整份當修改意見 resume（單次重 intake，不逐題重派），gate 會再次觸發。
 9. orchestrator 回 `done` 後，先執行收尾策略，不把 `done` 直接當整條 task-flow 的最終交付:
    - `commit:true` → 在同一個 worktree 內呼叫 `auto-commit`，沿用 `worktree-setup` 回傳的 `scope` / `branch` 與 commit context；`orchestrator/` 過程產物只交給 journal，不進交付 commit。
    - `commit:false` → 不呼叫 `auto-commit`；除非使用者明確要求，否則不 teardown，避免移除仍有未提交交付物的 worktree。
@@ -104,5 +104,6 @@ description: >-
 - 已先做 preflight triage;若未進完整流程,沒有建立 manifest 或 worktree
 - `scope` 已被後續 auto-commit / journal 沿用
 - `orchestrator` 是唯一寫 manifest 狀態與決定下一步的站
+- human gate 的開放問題已逐題訪談；偏離建議的答覆以單次重 intake 收斂，未逐題重派
 - commit 只在 orchestrator `done` 後發生
 - teardown 只在 commit 成功或使用者明確確認無需 commit 後執行，且必須通過 `worktree-teardown` 的未提交工作防護
