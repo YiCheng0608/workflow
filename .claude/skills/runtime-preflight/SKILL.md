@@ -1,6 +1,6 @@
 ---
 name: runtime-preflight
-description: 在隔離 worktree 內跑 unit / integration / e2e 等機器測試前準備 runtime 依賴環境。偵測 Node、Python、PHP、Go、Rust、Ruby、Docker 等專案的 lockfile / manifest,建立或重建 per-worktree 可變投影(node_modules、.venv、vendor、target 等),並只共享 immutable / package-manager-owned cache 或 store。Use before test workers run commands in a worktree; do not create worktrees, run the final test verdict, commit, push, or mutate manifest directly.
+description: 在隔離 worktree 內跑機器測試前準備 runtime 依賴環境。偵測各語言生態(Node、Python、PHP、Go、Rust、Ruby、Docker 等)的 lockfile / manifest,建立或重建 per-worktree 可變投影(node_modules、.venv 等),只共享 package-manager-owned 的 immutable cache / store。Use before test workers run commands in a worktree; do not create worktrees, run the final test verdict, commit, push, or mutate manifest directly.
 ---
 
 # runtime-preflight

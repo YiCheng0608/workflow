@@ -1,6 +1,6 @@
 ---
 name: worktree-setup
-description: flow 無關的隔離工作區建立器。吃一個 commit type（feat / fix / refactor …）與一個 scope，跑 scripts/worktree.js 以「當前分支（或指定 base）」為起點 `git worktree add` 出一個獨立目錄＋新分支（分支名 = `<type>/<scope>`，scope 已 sanitize；collision 自動加尾碼 -2/-3…；已有 worktree 掛在目標分支上則冪等重用）——讓多個 task 能在同一個 repo 同時跑而互不污染檔案。全程 local，不 push、不碰 remote。回傳 worktree 路徑、最終分支與最終 scope（含尾碼）：路徑供呼叫端進入該目錄執行，scope 供後續 commit 沿用作 commit scope 與 journal 分支。Use when a task needs its own isolated git worktree + branch before running a flow; do not use to commit, to run the pipeline itself, or for any remote / push operation.
+description: flow 無關的隔離工作區建立器。吃 commit type 與 scope，跑 scripts/worktree.js 從當前（或指定 base）分支 `git worktree add` 出獨立目錄＋新分支（`<type>/<scope>`，自動 sanitize、collision 加尾碼、冪等重用），讓多個 task 在同一 repo 平行互不污染。回傳 worktree 路徑、最終分支與 scope 供後續 commit / journal 沿用。全程 local，不碰 remote。Use when a task needs its own isolated git worktree + branch before running a flow; do not use to commit, run the pipeline itself, or for any remote / push operation.
 ---
 
 # worktree-setup

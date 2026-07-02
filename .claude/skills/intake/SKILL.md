@@ -111,7 +111,7 @@ orchestrator 會提供:
 
 ## 文件格式
 
-`intake-tasks.md` 對每個任務使用固定欄位:
+`intake-tasks.md` 對每個任務使用固定欄位。**每個任務段落必須自足**:orchestrator 派工時只會把該任務自己的段落(連同驗證地圖 / review map 中它那一列)貼給 worker,不會給整份文件——所以段落內不可用「同上」「見 spec-3 的說明」這類跨段落指涉,worker 需要的語意要寫全。
 
 ```markdown
 ## spec-2: <任務名稱>

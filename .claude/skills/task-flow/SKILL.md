@@ -1,10 +1,9 @@
 ---
 name: task-flow
 description: >-
-  通用任務引擎的入口流程。負責決定是否建立/重用隔離 worktree、呼叫 orchestrator、
-  讓測試前 runtime-preflight 準備依賴環境，在 clarify / human gate 時轉問使用者，
-  並在 done 後依收尾策略做本地 commit 與 teardown。
-  不適用於單一步驟編輯、獨立 commit、獨立 worktree、push、PR、deploy，或任何要繞過
+  通用任務引擎的入口流程。決定是否建立/重用隔離 worktree、呼叫 orchestrator 跑完整流程，
+  在 clarify / human gate 時轉問使用者，done 後依收尾策略做本地 commit 與 teardown。
+  不適用於單一步驟編輯、獨立 commit / worktree、push、PR、deploy，或任何要繞過
   intake、人類 gate、reviewer、真 test 的流程。
 ---
 

@@ -92,7 +92,9 @@ function requireLease(m, key) {
 // 縮小 orchestrator 自由組裝委派輸入的空間:上游 outputs、重做脈絡、ownership 約束、
 // 要求的審查深度、env 事實都由引擎給;語意(需求原文、任務描述)住在 requirement / intake
 // 文件,引擎不讀也不轉述。gate_outputs = review_gate spec(intake)已記回的產出檔路徑。
-function enrichAction(m, a) {
+// env 只在發派時附一次:batch 附在頂層(各 action 共用),單一 next 附在 brief;
+// 記回輸出內嵌的 next 不帶 env(同輪已給過)。
+function enrichAction(m, a, includeEnv = true) {
   if (a && a.type === 'produce' && m.specs[a.spec]) {
     const s = m.specs[a.spec];
     const upstream = {};
@@ -110,7 +112,7 @@ function enrichAction(m, a) {
       ...(s.forbid_outputs ? { forbid_outputs: s.forbid_outputs } : {}),
       ...(s.requires_test === true ? { requires_test: true } : {}),
       review: { required_depth: requiredReviewDepth(m, a.spec) },
-      env: m.env || {},
+      ...(includeEnv ? { env: m.env || {} } : {}),
     } };
   }
   if (a && a.type === 'test' && m.tests[a.test]) {
@@ -120,13 +122,13 @@ function enrichAction(m, a) {
       runner: t.runner, kind: t.kind, verifies: t.verifies,
       spec_outputs: (s && s.outputs) || [],
       last_fail: t.last_fail,
-      env: m.env || {},
+      ...(includeEnv ? { env: m.env || {} } : {}),
     } };
   }
   return a;
 }
 function enrichDecision(m, r) {
-  if (r.type === 'batch') return { ...r, actions: r.actions.map(a => enrichAction(m, a)) };
+  if (r.type === 'batch') return { ...r, env: m.env || {}, actions: r.actions.map(a => enrichAction(m, a, false)) };
   return enrichAction(m, r);
 }
 
@@ -135,7 +137,7 @@ function enrichDecision(m, r) {
 // produce/test ⇒ true(同回合續跑),clarify/done/halt ⇒ false。停點語意由 SKILL.md 獨家擁有。
 function nextStep(m) {
   const next = decide(m, ctxOf(m));   // m / ctx 此刻已是記回後的新狀態(已 writeCtx + save)
-  return { next: enrichAction(m, next), continue: next.type === 'produce' || next.type === 'test' };
+  return { next: enrichAction(m, next, false), continue: next.type === 'produce' || next.type === 'test' };
 }
 
 // ── result.json schema 驗證:套用前擋下不合法結果(exit 1、manifest 不動、回合不增)。──
