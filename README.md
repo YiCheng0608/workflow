@@ -118,6 +118,8 @@ node .claude/skills/orchestrator/scripts/cli.js validate orchestrator/manifest.j
 
 狀態變更只能透過 `produce` / `test` / `resume` 寫回。除了 bootstrap、重 intake 的受控結構修補、或使用者明確要求補機器驗收之外,不要手動改 manifest 狀態。
 
+引擎另有兩道協議守門:`next` / `next-all` 發派 action 時把授權寫進 `orchestration.leases`,`produce` / `test` 只接受發派過的 action;produce 成功記回必帶 `review` 欄位(審查深度不得低於 review map 要求,full / focused 必附落盤的 reviewer 結論檔)。
+
 ## 測試
 
 目前引擎回歸測試不依賴測試框架,全綠時 exit code 為 `0`:

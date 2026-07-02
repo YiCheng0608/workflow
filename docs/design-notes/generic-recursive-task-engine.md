@@ -37,6 +37,7 @@ subagent 角色只有邊界語意:
 - **重 `intake` 必經人類 gate。** 新計畫一樣有完整性風險,不繞過人。
 - **退回防拉鋸:** 同一根因反覆退回達 N 次,停下交由人定奪。
 - **能機器驗的任務必實跑。** 不以 reviewer 的「看起來對」取代可取得的 exit_code(對應引擎 `kind:'unit'` 的硬性證據要求)。
+- **引擎只接受自己發派過的 action。** `next` / `next-all` 發派授權(`orchestration.leases`),`produce` / `test` 記回前查驗、記回後消耗。orchestrator 的「先問、再派、再記回」因此是引擎硬約束,不是 prompt 自律;繞過 next 私跑一站無法把結果寫回 manifest。
 
 ## 四、設計原理:可靠度 = 碰得到現實的表面積
 
@@ -74,6 +75,8 @@ subagent 角色只有邊界語意:
 - **defer-until-signal**:只用於低風險、output ownership 清楚、`requires_test:true` 且有可靠機器驗證的節點。produce 前若 outputs 越界、`last_failure` 非空或實際範圍擴大,改走 full;produce 後若 test fail 或 evidence 不足,由 test 回寫失敗並讓重做下一輪升級 full。
 
 worker 的 handoff summary 只能降低 reviewer 找資料的成本,不能作為事實來源。成本控制不得取代人類 gate 或可機器驗的真 test。
+
+審查政策由引擎硬驗,不靠 orchestrator 自律:produce 成功記回必帶 `review` 欄位,深度不得低於 review map 要求(未列預設 full、fail-closed;`last_failure` 非空的重做一律升級 full),full / focused 必附落盤的 reviewer 結論檔(引擎驗檔案存在,記回後存進 `spec.last_review` 供追溯),defer-until-signal 必須有 `requires_test` + test 護欄。
 
 spec 可選填 `tier:"high"` / `"low"` 作為廠商中立的難度 / 槓桿提示;不確定就省略。`tier` 不參與引擎 routing,也不寫具體模型名或廠商。
 
