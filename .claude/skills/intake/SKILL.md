@@ -77,7 +77,7 @@ orchestrator 會提供:
 - 用 `depends_on` 表達真正資料 / 行為依賴;不要為了個人偏好的順序加假依賴。
 - 可平行的任務必須有不重疊的輸出 ownership;建議 `allowed_outputs` 或 `forbid_outputs`。
 - worker spec 預設不得寫測試檔;需要測試時用獨立 test 節點表達。
-- 可為每個任務標選填 `tier` 作為廠商中立的難度 / 槓桿提示,只接受 `high` / `low`;沒把握就省略。不要寫具體模型名或廠商。
+- 可為每個任務標選填 `tier` 作為廠商中立的難度 / 槓桿提示,只接受 `high` / `medium` / `low`;省略 = 交給 host 預設,`medium` = 明確要中檔;沒把握就省略。不要寫具體模型名或廠商。
 - 不要把 reviewer 當成任務節點。reviewer 是 orchestrator 在每個 worker produce 後跑的流程步驟。
 - 對下游任務給足語意:成功定義、上游 outputs、檔案 ownership、不得碰的範圍、可接受的人工判斷邊界。
 

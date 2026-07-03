@@ -6,7 +6,7 @@
 
 bootstrap / intake 只寫引擎會讀的通用欄位與本節明列的 orchestrator 策略欄位:spec 的 `id` / `skill` / `status` / `depends_on` / `outputs` / `last_failure` / `fix_target`,可選的 `review_gate` / `forbid_outputs` / `allowed_outputs` / `requires_test` / `tier`;test 的 `id` / `verifies` / `runner` / `kind` / `status` / `depends_on` / `last_fail`;以及 `env`、`env_patchable`、`planning`、`orchestration`。`planning` 可包含 `verification_map`、`review_map`;`tier` 與 `planning` 內的策略資料只給人類 gate / orchestrator 派工使用,`decide.js` 不讀。`block_kind` / `clarify` / `clarifications` / `last_review` / `orchestration.leases` / test `evidence` 等執行期欄位由 `cli.js` 寫,bootstrap / intake 不預填。
 
-`tier` 是選填、廠商中立的難度 / 槓桿提示,只接受 `"high"` / `"low"`;不確定就省略。實際 tier → 模型 / 子代理設定的對應是 host-local 決定,不寫進 manifest;不要在 manifest 寫具體模型名或廠商。
+`tier` 是選填、廠商中立的難度 / 槓桿提示,只接受 `"high"` / `"medium"` / `"low"`;省略 = 交給 host 預設,`"medium"` = 明確要中檔(不隨 host 預設漂移);不確定就省略。實際 tier → 模型 / 子代理設定的對應是 host-local 決定,不寫進 manifest;不要在 manifest 寫具體模型名或廠商。
 
 語意(需求原文、任務在講什麼、為什麼這樣拆、每個任務的驗收細節)住在 `orchestrator/requirement.md` 與 **intake 產出的分析書 / 任務清單 / 驗證地圖 / review map(.md)**,不寫成 manifest 新欄位。**不要為了帶語意新增 manifest schema**:manifest 不增加 `inputs` / `bindings` / `phase` 等欄位。委派 worker 時,主 agent 讀 requirement 與 intake 的產出,把對應的任務描述、上游 `outputs` 檔案與 `env` 事實交給子代理。
 
@@ -16,17 +16,17 @@ bootstrap / intake 只寫引擎會讀的通用欄位與本節明列的 orchestra
 
 **你要做的**:
 
-1. **派 intake 子代理**產出分析書 + 任務清單 + **驗證地圖** + **review map**(下游 worker 任務逐一列驗證方式、風險、拆分理由、review depth 與升級條件)。高槓桿,intake 產出先過一輪「盡力挑漏」的對抗式 reviewer;reviewer 自己把結論寫成 `orchestrator/review-<intake spec id>.md`(記回時作 `review.record`);這一輪不靠 review map。
+1. **派 intake 子代理**產出分析書 + 任務清單 + **驗證地圖** + **review map**(下游 worker 任務逐一列驗證方式、風險、拆分理由、review depth 與升級條件)。intake 是全流程唯一的動態步驟、槓桿最高,派工一律視同 `tier:"high"`(依本 host 的對應選高階子代理模型;沒有對應能力就忽略)。intake 產出先過一輪「盡力挑漏」的對抗式 reviewer;reviewer 自己把結論寫成 `orchestrator/review-<intake spec id>.md`(記回時作 `review.record`);這一輪不靠 review map。
 2. 依 intake 的任務清單,決定這次要哪些 spec(各自 `skill` 角色、`depends_on`)、配哪些 test(`verifies` 指向哪個 spec)。能機器驗的任務掛真 test(`kind:'unit'`/`'e2e'`、指定 `runner`);無客觀裁判的任務不掛 test,誠實標記。這一步只做一次 draft manifest,不要等主迴圈又重跑同一份 intake。
 3. 依 `manifest.example.json` 的結構寫出 `$MANIFEST`:
    - 每個 spec 帶 `id` / `skill` / `status:"pending"` / `depends_on` / `outputs:[]` / `last_failure:null` / `fix_target:null`;每個 test 帶 `id` / `verifies` / `runner` / `kind` / `status:"pending"` / `last_fail:null`。
-   - `intake` spec 帶 `review_gate:true`(= 人類 gate,設在 intake 產出之後);其餘 spec 不帶。
+   - `intake` spec 帶 `review_gate:true`(= 人類 gate,設在 intake 產出之後)與 `tier:"high"`(重 intake 的重派沿用同一提示);其餘 spec 不帶 `review_gate`。
    - `orchestration` 寫 `{ turn:0, maxTurns:<按規模>, noProgressK:3, failSignals:[] }`。`maxTurns` 按規模設:`max(30, 3 × (spec 數 + test 數))`。
    - 選填欄位依需求填,沒需要就不填:
      - `forbid_outputs`(glob 陣列):宣告「這個 spec 不得產生的檔」;produce 記回時 outputs 命中任一樣式 → 引擎改判 `code` 失敗回頭重做。worker 寫成品不寫測試,故禁 `*.test.*` / `*.spec.*` / `*__tests__*`。
      - `allowed_outputs`(glob 陣列):宣告「這個 spec 只能產生的檔」;outputs 有任一檔未命中白名單 → 改判 `code` 失敗回頭重做。用來把彼此平行的節點鎖進不重疊的檔案 ownership。
      - `requires_test`(boolean):宣告「此 spec 必須有 test 驗證」;`validate` 與 produce 記回都會擋「宣告了卻沒掛 test」(驗證地圖標 machine 的節點一律填)。
-     - `tier`(`"high"` / `"low"`):選填的 orchestrator 派工提示;引擎不讀,不影響 routing。不需要或不確定時省略。
+     - `tier`(`"high"` / `"medium"` / `"low"`):選填的 orchestrator 派工提示;引擎不讀,不影響 routing。不需要或不確定時省略。
      - `env_patchable`(string 陣列):worker 經 `env_patch` 可回寫的 env 欄位白名單,防 worker 改寫身份 / 前提欄位。
    - `env` 依需求填(這次任務需要哪些執行期事實 / 設定就寫哪些);沒需要的欄位不臆造。
    - **寫出後、凍結前先跑 `cli.js validate $MANIFEST`**(`depends_on` / `verifies` / test `depends_on` 都指向存在的節點、依賴無環;`tier` 與 `review_map.review_depth` enum 合法;`review_map.task` 指向存在 spec;`review_map` 標 `defer-until-signal` 的 spec 必須 `requires_test:true` 且有 test verifies 它);回 `{ok:false,errors}` 就先修好再凍結——別把懸空參照、成環或無機器護欄的 defer manifest 丟進主迴圈,引擎不報錯,只會讓相關節點永遠不 ready 或靜默缺少現實接觸,難診斷。

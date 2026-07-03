@@ -500,8 +500,8 @@ if (cmd === 'validate') {
     if (s.id !== id) errors.push(`spec「${id}」的 id 欄位(${s.id})與 key 不一致`);
     for (const d of (s.depends_on || []))
       if (!specs[d]) errors.push(`spec「${id}」depends_on 指向不存在的 spec「${d}」`);
-    if (s.tier !== undefined && !['high', 'low'].includes(s.tier))
-      errors.push(`spec「${id}」tier「${s.tier}」不合法(可用: high / low)`);
+    if (s.tier !== undefined && !['high', 'medium', 'low'].includes(s.tier))
+      errors.push(`spec「${id}」tier「${s.tier}」不合法(可用: high / medium / low)`);
     // requires_test:flow 宣告「此 spec 必須被測」,凍結前就要掛好 test,否則 produce 後
     // 會走「無 test → 直接 verified」靜默跳過測試站(produce 記回時還有第二道防線)。
     if (s.requires_test === true && !Object.values(tests).some(t => t.verifies === id))

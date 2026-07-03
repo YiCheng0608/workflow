@@ -445,13 +445,16 @@ test('review_map validate:task 必須存在、review_depth 必須合法', () => 
   assert.ok(errors.some(e => e.includes('review_depth') && e.includes('light')));
 });
 
-test('tier validate:只接受 high / low', () => {
+test('tier validate:只接受 high / medium / low', () => {
   const m = fixture();
-  m.specs['spec-4'].tier = 'medium';
+  m.specs['spec-4'].tier = 'ultra';
   const mp = writeJson('m.json', m);
   const r = run('validate', mp);
   assert.equal(r.code, 1);
-  assert.ok(JSON.parse(r.stdout).errors.some(e => e.includes('tier') && e.includes('medium')));
+  assert.ok(JSON.parse(r.stdout).errors.some(e => e.includes('tier') && e.includes('ultra')));
+  m.specs['spec-4'].tier = 'medium';
+  const mp2 = writeJson('m2.json', m);
+  assert.equal(run('validate', mp2).code, 0);
 });
 
 test('test 驗證:pass 無 evidence / unit 缺實跑計數 → exit 1(沒實跑不得報 pass)', () => {

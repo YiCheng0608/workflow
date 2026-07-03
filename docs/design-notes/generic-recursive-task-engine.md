@@ -78,7 +78,7 @@ worker 的 handoff summary 只能降低 reviewer 找資料的成本,不能作為
 
 審查政策由引擎硬驗,不靠 orchestrator 自律:produce 成功記回必帶 `review` 欄位,深度不得低於 review map 要求(未列預設 full、fail-closed;`last_failure` 非空的重做一律升級 full),full / focused 必附落盤的 reviewer 結論檔(引擎驗檔案存在,記回後存進 `spec.last_review` 供追溯),defer-until-signal 必須有 `requires_test` + test 護欄。
 
-spec 可選填 `tier:"high"` / `"low"` 作為廠商中立的難度 / 槓桿提示;不確定就省略。`tier` 不參與引擎 routing,也不寫具體模型名或廠商。
+spec 可選填 `tier:"high"` / `"medium"` / `"low"` 作為廠商中立的難度 / 槓桿提示;省略 = 交給 host 預設,`"medium"` = 明確要中檔;不確定就省略。`tier` 不參與引擎 routing,也不寫具體模型名或廠商;實際 tier → 模型的對應是 host-local 決定。intake 派工(含重 intake)一律視同 `tier:"high"`。
 
 ## 八、邊界:扁平與遞迴
 
