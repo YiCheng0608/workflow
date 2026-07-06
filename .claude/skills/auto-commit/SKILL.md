@@ -1,6 +1,6 @@
 ---
 name: auto-commit
-description: flow 無關的 commit 站。輸入 commit context（commitType、scope、ticketId、commitMode）、交付物挑檔規則與可選的過程紀錄清單，在當前 repo/worktree 產生本地 Conventional Commit；可選發佈過程紀錄到孤兒 journal 分支。預設模式收程式碼與測試檔、排除過程產物；initial 模式收綠地鷹架交付物；declared 模式照呼叫端提供的聲明交付清單收檔。全程 local，不建分支、不切分支、不 push、不碰 remote。Use when deliverables need a local commit; do not use to create branches, run a pipeline, push, or open PRs.
+description: flow 無關的 commit 站。依 commit context（commitType、scope 等）與挑檔規則，在當前 repo/worktree 產生本地 Conventional Commit，可選把過程紀錄發佈到孤兒 journal 分支。支援 default / initial / declared 三種挑檔模式。全程 local，不建分支、不切分支、不 push。Use when deliverables need a local commit; do not use to create branches, run a pipeline, push, or open PRs.
 ---
 
 # auto-commit

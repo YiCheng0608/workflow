@@ -1,26 +1,33 @@
 {
-  "task": "範例(通用任務引擎):把一份使用者需求經 intake 拆成任務清單 + 驗證地圖(過人類 gate),再由 worker 逐一產出、reviewer 對著需求原文審;能機器驗的節點實跑 test,無客觀裁判的節點誠實標記為『無裁判』。",
-  "_note": "這是與任務類型無關的結構範本,不綁任何特定領域。spec.skill 是 worker 角色標籤(intake / worker),不是某個 skill 檔名——orchestrator 依它派一個扮演該角色的 subagent,把需求原文 + 任務描述交給它。引擎(cli.js / decide.js)只認得通用欄位,不認得角色語意。_ 開頭欄位僅為註解,引擎會忽略。",
-  "_note_intake": "spec-1 是 intake:它的『產出』= 分析書 + 任務清單 + 驗證地圖(.md)。intake 帶 review_gate:true 作為人類 gate——產出成功後引擎停下,等使用者檢查驗證地圖、同意後才放行下游 worker。下游所有 worker spec 在 bootstrap 時就已寫進 manifest(intake 是整條流程唯一的動態步驟,規劃完即凍結);intake spec 只是把分析書產成可供人查看的文件並觸發 gate。reviewer 若判定根因在 intake(拆解漏了 / 規格錯),blame 指向 spec-1、altitude:spec → intake 重做、review_gate 再次觸發,等同『退回重 intake、再過一次人類 gate』。",
-  "_note_reviewer": "reviewer 不是 manifest 節點,是 orchestrator 在每個 worker produce 後跑的流程步驟:另一個 subagent 對著需求原文(非衍生規格)以對抗式 framing 審產出,過了才記 ok:true,審出做歪則記 ok:false 回頭重做。能機器驗的節點另有 test 節點實跑作客觀裁判;reviewer 抓做歪型錯誤,抓不到遺漏型錯誤(那只能由人類 gate 守)。",
-  "_note_planning": "planning.verification_map 記『驗證地圖』:逐任務標 machine(有客觀裁判,實跑 test)或 no-judge(無客觀裁判,僅 reviewer 主觀審)。這是人類 gate 最高價值的審查對象——人確認的不只是『要做這些任務』,而是『接受其中哪些任務沒有客觀裁判』。reason 純人類可讀,不參與控制流(decide.js 不讀 planning)。",
+  "task": "範例(通用任務引擎):把一份使用者需求經 intake 拆成任務清單 + 驗證地圖 + review map(過人類 gate),再由 worker 逐一產出、依 review map 做 full / focused / deferred 審查;能機器驗的節點實跑 test,無客觀裁判的節點誠實標記為『無裁判』。",
+  "_note": "通用結構範本。引擎(cli.js / decide.js)只讀通用狀態欄位;_ 開頭欄位僅為註解。",
+  "_note_requirement": "真實 bootstrap 需另寫 orchestrator/requirement.md 保存使用者原文;manifest 不存需求全文。",
+  "_note_intake": "spec-1 是 intake,帶 review_gate:true。其 outputs 是 analysis / tasks / verification / review-map 四份文件,人類 gate 同意後才放行下游。",
+  "_note_reviewer": "reviewer 不是 manifest 節點。下游 worker produce 後、cli.js produce 前,orchestrator 依 planning.review_map 做 full / focused reviewer 或合法 defer。",
+  "_note_planning": "verification_map 與 review_map 給 human gate / orchestrator 使用;decide.js 不讀。review_map 只列下游 worker spec,intake 自身由 orchestrator 固定 full reviewer。",
   "planning": {
     "verification_map": [
       { "task": "spec-2", "verdict": "machine", "how": "unit test 實跑,exit_code + passed/failed", "reason": "純邏輯,可機器驗" },
       { "task": "spec-3", "verdict": "machine", "how": "unit test 實跑,exit_code + passed/failed", "reason": "純邏輯,可機器驗" },
       { "task": "spec-4", "verdict": "machine", "how": "整合 / 端到端 test 實跑", "reason": "跨節點行為,實跑端到端驗" },
       { "task": "spec-5", "verdict": "no-judge", "how": "僅 reviewer 對著需求原文主觀審", "reason": "說明文件,無客觀裁判——人類 gate 須明確接受此節點沒有機器裁判" }
+    ],
+    "review_map": [
+      { "task": "spec-2", "risk": "low", "review_depth": "defer-until-signal", "split_reason": "獨立輸出 ownership 且 unit test 可驗", "upgrade_triggers": ["outputs 越界", "last_failure 非空", "test fail 後重做"], "reason": "低風險且有可靠 machine test" },
+      { "task": "spec-3", "risk": "low", "review_depth": "defer-until-signal", "split_reason": "獨立輸出 ownership 且 unit test 可驗", "upgrade_triggers": ["outputs 越界", "last_failure 非空", "test fail 後重做"], "reason": "低風險且有可靠 machine test" },
+      { "task": "spec-4", "risk": "medium", "review_depth": "focused", "split_reason": "整合點需等 spec-2 / spec-3 產物", "upgrade_triggers": ["e2e fail", "跨出 allowed_outputs", "實際碰到更多外部依賴"], "reason": "跨節點整合需抽查 diff 與行為證據" },
+      { "task": "spec-5", "risk": "high", "review_depth": "full", "split_reason": "無客觀裁判", "upgrade_triggers": ["always"], "reason": "no-judge 任務必須完整 reviewer" }
     ]
   },
-  "_note_requires_test": "spec.requires_test(選填,boolean):宣告『本 spec 必須有 test 驗證』。validate 在凍結前擋『宣告了卻沒有任何 test verifies 它』。驗證地圖標 machine 的節點一律 requires_test:true;標 no-judge 的節點不掛 test、不填 requires_test(誠實標記為無客觀裁判)。",
-  "_note_allowed_outputs": "spec.allowed_outputs(選填,glob 樣式陣列):宣告『這個 spec 只能產生哪些檔』;白名單外檔案會被引擎(applyProduce)改判 code 失敗、回頭重做。用來把彼此平行的 worker 鎖在不重疊的檔案 ownership 內,確保平行安全。`*` 為萬用字元。",
-  "_note_forbid_outputs": "spec.forbid_outputs(選填,glob 樣式陣列):宣告『這個 spec 不得產生的檔』;outputs 命中任一樣式時改判 code 失敗、回頭重做。worker 寫成品但不寫測試,故禁 *.test.* / *.spec.* / *__tests__*(測試檔只能由 test 節點產)。",
-  "_note_review_gate": "spec.review_gate(選填,boolean):宣告『本站產出成功後停下等使用者查看』(=人類 gate)。applyProduce 標 blocked(kind:'review')、next 轉 clarify;使用者 resume {\"approve\":true} 才進 produced/verified,帶修改意見 resume 則 reopen 重做。本範本只有 intake 帶 review_gate——人類 gate 的價值在審查驗證地圖,故設在 intake 產出之後。",
-  "_note_test_evidence": "test 結果的 evidence(pass:true 時必填、非空 object):實跑證據。若 evidence 帶 failed / passed 計數,cli.js 會驗 failed===0 且 passed>=1(todo-only 不算通過)。kind:'unit' 的 pass 另必含 { command, exit_code:0, passed, failed };kind:'e2e' 的形狀較自由(端到端行為描述 / 快照路徑 / 驗的是真依賴還是 mock 退路等),引擎只要求非空。",
+  "_note_requires_test": "requires_test:true 的 spec 必須有 test verifies 它;machine 任務一律填,no-judge 不填。",
+  "_note_output_guards": "allowed_outputs / forbid_outputs 用 glob 約束 worker 產出 ownership;命中違規時 applyProduce 會改判 code 失敗。",
+  "_note_review_gate": "review_gate:true 會在 produce 成功後停下等使用者 approve。本範本只給 intake 使用。",
+  "_note_protocol": "orchestration.leases 由 cli.js next / next-all 發派時自動寫入;produce / test 只接受發派過的 action。produce 成功記回必帶 review 欄位:深度不得低於 review_map 要求(未列預設 full;last_failure 非空一律 full),full / focused 必附落盤的 reviewer 結論檔(record),引擎記回後存進 spec.last_review。",
+  "_note_test_evidence": "test 結果的 evidence(pass:true 時必填、非空 object):實跑證據。若測試前需要 runtime 依賴,先依 runtime-preflight 準備 worktree 內可變投影並只共享安全 cache / store,再把 preflight 狀態併入 evidence。若 evidence 帶 failed / passed 計數,cli.js 會驗 failed===0 且 passed>=1(todo-only 不算通過)。kind:'unit' 的 pass 另必含 { command, exit_code:0, passed, failed };kind:'e2e' 的形狀較自由(端到端行為描述 / 快照路徑 / 驗的是真依賴還是 mock 退路等),引擎只要求非空。",
   "_note_env": "env(選填):本次任務的執行期事實 / 設定,由 intake 依需求填(任務需要什麼就寫什麼,沒提到的不臆造)。通用引擎不預設任何欄位。env_patchable 列出 worker 經 test 結果的 env_patch 可回寫的欄位白名單(只有執行期偵測到的事實可回寫,身份 / 前提欄位不可被 patch)。",
   "specs": {
     "spec-1": { "id": "spec-1", "skill": "intake", "status": "pending", "depends_on": [], "outputs": [], "last_failure": null, "fix_target": null, "review_gate": true },
-    "spec-2": { "id": "spec-2", "skill": "worker", "status": "pending", "depends_on": ["spec-1"], "outputs": [], "last_failure": null, "fix_target": null, "forbid_outputs": ["*.test.*", "*.spec.*", "*__tests__*"], "requires_test": true },
+    "spec-2": { "id": "spec-2", "skill": "worker", "status": "pending", "depends_on": ["spec-1"], "outputs": [], "last_failure": null, "fix_target": null, "forbid_outputs": ["*.test.*", "*.spec.*", "*__tests__*"], "requires_test": true, "tier": "low" },
     "spec-3": { "id": "spec-3", "skill": "worker", "status": "pending", "depends_on": ["spec-1"], "outputs": [], "last_failure": null, "fix_target": null, "forbid_outputs": ["*.test.*", "*.spec.*", "*__tests__*"], "requires_test": true },
     "spec-4": { "id": "spec-4", "skill": "worker", "status": "pending", "depends_on": ["spec-2", "spec-3"], "outputs": [], "last_failure": null, "fix_target": null, "forbid_outputs": ["*.test.*", "*.spec.*", "*__tests__*"], "requires_test": true },
     "spec-5": { "id": "spec-5", "skill": "worker", "status": "pending", "depends_on": ["spec-1"], "outputs": [], "last_failure": null, "fix_target": null }

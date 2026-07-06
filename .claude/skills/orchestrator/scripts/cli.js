@@ -8,6 +8,8 @@
 //
 // 鐵則:routing / 狀態轉移邏輯全在 decide.js,這支只負責讀檔、呼叫、寫回。
 // 唯一事實來源 = manifest 檔本身(含迴圈計數 orchestration,所以可以 crash 後接著跑)。
+// 協議強制:next / next-all 發派 action 時把授權寫進 orchestration.leases;
+// produce / test 只接受發派過的 action(先問、再派、再記回,繞過 next 私跑會被 exit 1 擋下)。
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -35,6 +37,7 @@ function writeCtx(m, ctx) {
   m.orchestration = {
     turn: ctx.turn, maxTurns: ctx.maxTurns,
     noProgressK: ctx.noProgressK, failSignals: ctx.failSignals,
+    leases: (m.orchestration || {}).leases || [],
   };
 }
 
@@ -47,12 +50,94 @@ function clearSignalsFor(signals, ...targets) {
   return (signals || []).filter(s => !set.has(String(s).split(':')[0]));
 }
 
+// ── action lease(協議強制):引擎只接受「自己發派過的 action」記回。──────────────
+// 發派(next / next-all 回 produce / test / batch)= 新一輪的開始:leases 整批重發成
+// 「此刻 decideAll 授權的集合」,上一輪殘留、已不再被授權的 lease 一併作廢——依「先問、
+// 再派、再記回」協議,呼叫 next / next-all 時上一批結果都已記回,沒有 in-flight worker
+// 依賴舊 lease,殘留授權只會變成繞過 next 的後門。記回(produce / test)前查驗授權存在、
+// 記回後消耗,並以 union 補進新授權:批次序列記回途中,其他 in-flight 成員的 lease 不被
+// 中途的狀態變化洗掉。clarify / done / halt 是停點不是發派:不重發、不清授權,平行批次裡
+// 其他 in-flight worker 的結果仍可記回,不因某一項先觸發停點而作廢已做完的工作。
+function leaseKey(a) {
+  return a.type === 'produce' ? `produce:${a.spec}` : a.type === 'test' ? `test:${a.test}` : null;
+}
+function currentLeaseKeys(m) {
+  const keys = [];
+  for (const a of (decideAll(m, ctxOf(m)).actions || [])) {
+    const k = leaseKey(a);
+    if (k) keys.push(k);
+  }
+  return keys;
+}
+function refreshLeases(m, consumed) {
+  const set = new Set((m.orchestration && m.orchestration.leases) || []);
+  if (consumed) set.delete(consumed);
+  for (const k of currentLeaseKeys(m)) set.add(k);
+  m.orchestration = m.orchestration || {};
+  m.orchestration.leases = [...set];
+}
+function reissueLeases(m) {
+  m.orchestration = m.orchestration || {};
+  m.orchestration.leases = currentLeaseKeys(m);
+}
+function requireLease(m, key) {
+  const leases = (m.orchestration && m.orchestration.leases) || [];
+  if (!leases.includes(key)) {
+    fail(`「${key}」不在引擎發派的授權裡(orchestration.leases)。記回只接受 next / next-all 發派過的 action;` +
+         `先跑 cli.js next-all(或 next)取得本輪發派,再委派、再記回(manifest 未變動、回合未增)`);
+  }
+}
+
+// ── 委派 brief:把 manifest 能機械算出的派工輸入直接附在 action 上。──────────────
+// 縮小 orchestrator 自由組裝委派輸入的空間:上游 outputs、重做脈絡、ownership 約束、
+// 要求的審查深度、env 事實都由引擎給;語意(需求原文、任務描述)住在 requirement / intake
+// 文件,引擎不讀也不轉述。gate_outputs = review_gate spec(intake)已記回的產出檔路徑。
+// env 只在發派時附一次:batch 附在頂層(各 action 共用),單一 next 附在 brief;
+// 記回輸出內嵌的 next 不帶 env(同輪已給過)。
+function enrichAction(m, a, includeEnv = true) {
+  if (a && a.type === 'produce' && m.specs[a.spec]) {
+    const s = m.specs[a.spec];
+    const upstream = {};
+    for (const d of (s.depends_on || [])) upstream[d] = (m.specs[d] && m.specs[d].outputs) || [];
+    const gateOutputs = Object.values(m.specs)
+      .filter(x => x.review_gate === true && x.id !== s.id)
+      .flatMap(x => x.outputs || []);
+    return { ...a, brief: {
+      skill: s.skill,
+      ...(s.tier !== undefined ? { tier: s.tier } : {}),
+      depends_on_outputs: upstream,
+      ...(gateOutputs.length ? { gate_outputs: gateOutputs } : {}),
+      last_failure: s.last_failure, fix_target: s.fix_target,
+      ...(s.allowed_outputs ? { allowed_outputs: s.allowed_outputs } : {}),
+      ...(s.forbid_outputs ? { forbid_outputs: s.forbid_outputs } : {}),
+      ...(s.requires_test === true ? { requires_test: true } : {}),
+      review: { required_depth: requiredReviewDepth(m, a.spec) },
+      ...(includeEnv ? { env: m.env || {} } : {}),
+    } };
+  }
+  if (a && a.type === 'test' && m.tests[a.test]) {
+    const t = m.tests[a.test];
+    const s = m.specs[t.verifies];
+    return { ...a, brief: {
+      runner: t.runner, kind: t.kind, verifies: t.verifies,
+      spec_outputs: (s && s.outputs) || [],
+      last_fail: t.last_fail,
+      ...(includeEnv ? { env: m.env || {} } : {}),
+    } };
+  }
+  return a;
+}
+function enrichDecision(m, r) {
+  if (r.type === 'batch') return { ...r, env: m.env || {}, actions: r.actions.map(a => enrichAction(m, a, false)) };
+  return enrichAction(m, r);
+}
+
 // ── 記回 produce/test 後,順手把「下一步」算進輸出,消掉「記回」與「再呼叫 next」之間的停頓點。
-// 只多算一次 decide()(唯讀),不改狀態,兩 runtime 共享。continue 是純訊號:
+// 只多算一次 decide(),不改狀態,兩 runtime 共享。continue 是純訊號:
 // produce/test ⇒ true(同回合續跑),clarify/done/halt ⇒ false。停點語意由 SKILL.md 獨家擁有。
 function nextStep(m) {
   const next = decide(m, ctxOf(m));   // m / ctx 此刻已是記回後的新狀態(已 writeCtx + save)
-  return { next, continue: next.type === 'produce' || next.type === 'test' };
+  return { next: enrichAction(m, next, false), continue: next.type === 'produce' || next.type === 'test' };
 }
 
 // ── result.json schema 驗證:套用前擋下不合法結果(exit 1、manifest 不動、回合不增)。──
@@ -151,25 +236,72 @@ function validateResumeAnswer(kind, a) {
   return errs;
 }
 
+// ── review 欄位硬驗:produce 成功記回必須交代「這一站的審查怎麼做的」。────────────
+// review map 是人類 gate 凍結的審查策略;不驗的話「跳過 reviewer 直接記 ok:true」只能靠
+// SKILL 自律。這裡把它變成引擎守門:深度不得低於 review map 要求(未列預設 full、fail-closed;
+// last_failure 非空的重做一律升級 full),full / focused 必附落盤的 reviewer 結論檔(record),
+// defer-until-signal 只在該 spec 有機器測試護欄(requires_test + test)時合法。
+const REVIEW_DEPTHS = ['full', 'focused', 'defer-until-signal'];
+const REVIEW_RANK = { 'defer-until-signal': 0, focused: 1, full: 2 };
+function requiredReviewDepth(m, specId) {
+  const s = m.specs[specId];
+  if (s.review_gate === true) return 'full';        // gate spec(intake)固定對抗式 full
+  if (s.last_failure != null) return 'full';        // 重做 = 升級訊號
+  const entry = (((m.planning || {}).review_map) || []).find(e => isPlainObject(e) && e.task === specId);
+  return entry && REVIEW_DEPTHS.includes(entry.review_depth) ? entry.review_depth : 'full';
+}
+function validateReview(m, specId, r) {
+  const errs = [];
+  const rv = r.review;
+  const required = requiredReviewDepth(m, specId);
+  if (!isPlainObject(rv)) {
+    return [`produce 成功記回必須帶 review 欄位(此 spec 要求的審查深度:${required});` +
+            `形狀:{ "depth": "full|focused|defer-until-signal", "record": "<reviewer 結論檔路徑>" }(defer 免 record)`];
+  }
+  if (!REVIEW_DEPTHS.includes(rv.depth)) {
+    return [`review.depth「${rv.depth}」不合法(可用: ${REVIEW_DEPTHS.join(' / ')})`];
+  }
+  if (REVIEW_RANK[rv.depth] < REVIEW_RANK[required]) {
+    errs.push(`review.depth「${rv.depth}」低於此 spec 要求的「${required}」(review map 未列預設 full;last_failure 非空的重做一律 full)`);
+  }
+  if (rv.depth === 'defer-until-signal') {
+    const s = m.specs[specId];
+    const hasTest = Object.values(m.tests || {}).some(t => t.verifies === specId);
+    if (s.requires_test !== true || !hasTest) {
+      errs.push('defer-until-signal 只能用於 requires_test:true 且至少有一個 test verifies 它的 spec(沒有機器護欄不得略過 reviewer)');
+    }
+  } else if (typeof rv.record !== 'string' || !rv.record.trim()) {
+    errs.push('full / focused 審查必須帶 review.record(reviewer 結論檔路徑,落盤供追溯)');
+  }
+  return errs;
+}
+
 const [cmd, manifestPath, arg1, arg2] = process.argv.slice(2);
 if (!cmd || !manifestPath) {
   fail('用法: node cli.js <next|next-all|produce|test|resume> <manifest> [args]');
 }
 
-// ── next:讀狀態,印出「下一步該做什麼」(單一)。唯讀,不改 manifest。──────────
+// ── next:讀狀態,印出「下一步該做什麼」(單一)。發派時整批重發授權(作廢殘留),
+// 停點不動授權;不動任何 spec / test 狀態,同樣的狀態重呼叫得到同樣的 action 與授權(冪等)。──
 if (cmd === 'next') {
   const m = load(manifestPath);
-  out(decide(m, ctxOf(m)));
+  const r = decide(m, ctxOf(m));
+  if (r.type === 'produce' || r.type === 'test') reissueLeases(m);
+  save(manifestPath, m);
+  out(enrichDecision(m, r));
   process.exit(0);
 }
 
-// ── next-all:印出「此刻所有可平行的 action」(批次)。唯讀,不改 manifest。────────
+// ── next-all:印出「此刻所有可平行的 action」(批次),並發派授權(同 next,冪等)。────────
 // 非同步 / 平行 runtime 用:回 { type:'batch', actions:[...] } / { type:'done' } /
 // { type:'halt', reason }。actions 裡的 produce/test 彼此無依賴邊,可同時委派子代理跑;
 // 但結果一律序列記回(逐一 cli.js produce / test),平行的只有 worker 做事,不是改 manifest。
 if (cmd === 'next-all') {
   const m = load(manifestPath);
-  out(decideAll(m, ctxOf(m)));
+  const r = decideAll(m, ctxOf(m));
+  if (r.type === 'batch') reissueLeases(m);
+  save(manifestPath, m);
+  out(enrichDecision(m, r));
   process.exit(0);
 }
 
@@ -178,6 +310,7 @@ if (cmd === 'produce') {
   if (!arg1) fail('produce 需要 <specId>');
   const m = load(manifestPath);
   if (!m.specs[arg1]) fail(`manifest 沒有 spec「${arg1}」`);
+  requireLease(m, `produce:${arg1}`);
   const result = arg2 ? load(arg2) : { ok: true };
 
   const verrs = validateProduceResult(m, arg1, result);
@@ -190,6 +323,15 @@ if (cmd === 'produce') {
     if (missing.length) fail(`outputs 裡的檔不存在於磁碟(worker 宣稱寫了但沒寫?manifest 未變動、回合未增):\n  - ${missing.join('\n  - ')}\n  (執行目錄:${process.cwd()};outputs 路徑應相對於專案工作目錄)`);
   }
 
+  // review 欄位硬驗(成功路徑):審查深度合規,且 full / focused 的 reviewer 結論檔真的落盤。
+  if (result.ok !== false) {
+    const rerrs = validateReview(m, arg1, result);
+    if (rerrs.length) fail(`result.json 不合法(manifest 未變動、回合未增,修正後重新記回):\n  - ${rerrs.join('\n  - ')}`);
+    if (result.review.record && !fs.existsSync(path.resolve(result.review.record))) {
+      fail(`review.record 指向的檔不存在於磁碟:${result.review.record}(reviewer 結論必須落盤;manifest 未變動、回合未增。執行目錄:${process.cwd()})`);
+    }
+  }
+
   // requires_test 第二道防線(第一道在 validate):宣告必測的 spec 若沒有任何 test verifies 它,
   // 記回成功會走「無 test → 直接 verified」靜默跳過驗證——在記回前擋下,逼 manifest 修正。
   if (result.ok !== false && m.specs[arg1].requires_test === true &&
@@ -198,6 +340,11 @@ if (cmd === 'produce') {
   }
 
   applyProduce(m, arg1, result);
+
+  // 審查紀錄落盤到 manifest(執行期欄位,由 cli 寫):供 audit 與下一輪升級判斷追溯。
+  if (result.ok !== false) {
+    m.specs[arg1].last_review = { depth: result.review.depth, record: result.review.record || null };
+  }
 
   // 守門擋下:worker 報 ok,但產出命中 spec 宣告的 forbid_outputs / allowed_outputs → applyProduce 已改判 failed。
   // 偵測法 = 「沒回報失敗、卻變成 failed」,以便比照一般 produce 失敗留訊號並對 orchestrator 揭露原因。
@@ -220,6 +367,7 @@ if (cmd === 'produce') {
     ctx.failSignals = clearSignalsFor(ctx.failSignals, arg1);
   }
   writeCtx(m, ctx);
+  refreshLeases(m, `produce:${arg1}`);   // 消耗本次授權;重做等新授權由記回後的狀態重新算出
   save(manifestPath, m);
 
   // review gate:產出成功但 spec 宣告 review_gate → applyProduce 已標 blocked(kind:'review'),
@@ -240,6 +388,7 @@ if (cmd === 'test') {
   if (!arg2) fail('test 需要 <result.json>(內含 { pass, altitude|verdict, blame?, reason, evidence?, env_patch? })');
   const m = load(manifestPath);
   if (!m.tests[arg1]) fail(`manifest 沒有 test「${arg1}」`);
+  requireLease(m, `test:${arg1}`);
   const result = load(arg2);
 
   const verrs = validateTestResult(m, arg1, result);
@@ -267,6 +416,7 @@ if (cmd === 'test') {
     ctx.failSignals = clearSignalsFor(ctx.failSignals, m.tests[arg1].verifies, arg1);
   }
   writeCtx(m, ctx);
+  refreshLeases(m, `test:${arg1}`);   // 消耗本次授權;重跑 / 重做的新授權由記回後的狀態算出
   save(manifestPath, m);
 
   if (result.pass) {
@@ -298,6 +448,15 @@ if (cmd === 'resume') {
   const isEnvBlock = !!(m.block && m.block.test === arg1 && m.tests[arg1]);
   if (!isEnvBlock && !m.specs[arg1]) fail(`resume 找不到可解除的對象「${arg1}」(既非 blocked spec,也非 environment block 的 test)`);
 
+  // resume 只能解除「引擎此刻停在的對象」:blocked spec、environment block 的 test、或震盪
+  // clarify 指向的 spec(status 可能是 failed)。開放任意 spec 會讓 reopen 變成繞過流程的重做後門。
+  if (!isEnvBlock && m.specs[arg1].status !== 'blocked') {
+    const cur = decide(m, ctxOf(m));
+    if (!(cur.type === 'clarify' && cur.spec === arg1)) {
+      fail(`spec「${arg1}」不是引擎停下的 clarify 對象(status=${m.specs[arg1].status}),resume 不適用。要重做請走正常失敗路徑(produce / test 記回失敗)`);
+    }
+  }
+
   // 先解析目標的 clarify kind 再驗 answer:review gate 與其他 kind 的合法形狀不同。
   const kind = isEnvBlock ? m.block.kind : (m.specs[arg1].block_kind || null);
   const verrs = validateResumeAnswer(kind, answer);
@@ -317,6 +476,7 @@ if (cmd === 'resume') {
   // 釐清 = 這個 target(被 resume 的 spec 或 environment block 的 test)有進度 → 只清它的震盪訊號。
   ctx.failSignals = clearSignalsFor(ctx.failSignals, arg1);
   writeCtx(m, ctx);
+  refreshLeases(m);   // 解除 blocked 後世界改變,重算本輪授權
   save(manifestPath, m);
 
   out({ recorded: 'resume', ...targetDesc, turn: ctx.turn });
@@ -340,6 +500,8 @@ if (cmd === 'validate') {
     if (s.id !== id) errors.push(`spec「${id}」的 id 欄位(${s.id})與 key 不一致`);
     for (const d of (s.depends_on || []))
       if (!specs[d]) errors.push(`spec「${id}」depends_on 指向不存在的 spec「${d}」`);
+    if (s.tier !== undefined && !['high', 'medium', 'low'].includes(s.tier))
+      errors.push(`spec「${id}」tier「${s.tier}」不合法(可用: high / medium / low)`);
     // requires_test:flow 宣告「此 spec 必須被測」,凍結前就要掛好 test,否則 produce 後
     // 會走「無 test → 直接 verified」靜默跳過測試站(produce 記回時還有第二道防線)。
     if (s.requires_test === true && !Object.values(tests).some(t => t.verifies === id))
@@ -350,6 +512,31 @@ if (cmd === 'validate') {
     if (!specs[t.verifies]) errors.push(`test「${id}」verifies 指向不存在的 spec「${t.verifies}」`);
     for (const d of (t.depends_on || []))
       if (!tests[d]) errors.push(`test「${id}」depends_on 指向不存在的 test「${d}」`);
+  }
+
+  // review_map 是 orchestrator 的策略資料,不參與 decide.js routing;但 defer 代表 produce 前
+  // 合法略過 reviewer,所以凍結前必須確定它後面一定接得到機器驗證,否則會靜默沒有現實接觸。
+  const reviewMap = (m.planning || {}).review_map;
+  if (reviewMap !== undefined && !Array.isArray(reviewMap)) {
+    errors.push('planning.review_map 必須是 array');
+  } else {
+    for (const entry of (reviewMap || [])) {
+      if (!isPlainObject(entry)) { errors.push('planning.review_map 含非 object 項目'); continue; }
+      const id = entry.task;
+      if (typeof id !== 'string' || !id.trim()) { errors.push('planning.review_map 每一項都必須有 task(string)'); continue; }
+      const s = specs[id];
+      if (!s) { errors.push(`review_map 指向不存在的 spec「${id}」`); continue; }
+      if (!['full', 'focused', 'defer-until-signal'].includes(entry.review_depth)) {
+        errors.push(`review_map spec「${id}」的 review_depth「${entry.review_depth}」不合法(可用: full / focused / defer-until-signal)`);
+        continue;
+      }
+      if (entry.review_depth === 'defer-until-signal') {
+        const hasTest = Object.values(tests).some(t => t.verifies === id);
+        if (s.requires_test !== true || !hasTest) {
+          errors.push(`review_map 將 spec「${id}」標為 defer-until-signal,但該 spec 必須 requires_test:true 且至少有一個 test verifies 它`);
+        }
+      }
+    }
   }
 
   // 依賴環檢測(DFS 三色):有環 → 相關節點永遠不 ready → halt「無可執行動作」,先在這裡擋下。

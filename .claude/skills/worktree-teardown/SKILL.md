@@ -1,6 +1,6 @@
 ---
 name: worktree-teardown
-description: 隔離工作區建立器的逆操作:安全移除一個 task 的隔離 worktree。跑 scripts/teardown.js，用 ground truth（git status 扣掉過程產物約定目錄 orchestrator/）判斷「有沒有未提交的工作」——有未提交工作（含 orchestrator/ 以外的 .md，它們不進 journal、移除即遺失）就拒絕移除，沒有才用 --force 跨過 orchestrator/ 過程噪音安全移除。預設只移除 worktree、**不刪分支**：task 分支（含 commit）與孤兒 journal 分支都保留；要刪 task 分支用 --delete-branch（預設 -d 安全刪，未 merge 會拒絕）。全程 local。Use when a task's worktree should be cleaned up safely — either right after a successful commit keeping the branch for later merge, or after the branch has been merged; do not use to remove a worktree that still has uncommitted code (it refuses by design), to delete the journal branch by default, or for any remote operation.
+description: 安全移除一個 task 的隔離 worktree（worktree-setup 的逆操作）。跑 scripts/teardown.js，以 git status（扣掉過程產物目錄 orchestrator/）判斷有無未提交工作——有就拒絕移除，沒有才安全移除。預設保留 task 分支與 journal 分支；刪 task 分支用 --delete-branch。全程 local。Use when a task's worktree should be cleaned up after a successful commit or after the branch is merged; do not use on a worktree with uncommitted code (it refuses by design), to delete the journal branch, or for any remote operation.
 ---
 
 # worktree-teardown

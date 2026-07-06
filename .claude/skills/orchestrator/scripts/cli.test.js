@@ -43,9 +43,11 @@ function touch(rel) {
   fs.writeFileSync(p, '// stub\n');
   return rel;
 }
-['src/Foo.jsx', 'src/Foo.test.jsx', 'src/layout/Sidebar.tsx', 'src/layout/Header.tsx', 'orchestrator/triage.md'].forEach(touch);
+['src/Foo.jsx', 'src/Foo.test.jsx', 'src/layout/Sidebar.tsx', 'src/layout/Header.tsx', 'orchestrator/triage.md', 'orchestrator/review.md'].forEach(touch);
 // unit test 報 pass 時的合法實跑證據(引擎要求 command / exit_code:0 / 計數)
 const EV_PASS = { command: 'vitest run', exit_code: 0, passed: 5, failed: 0 };
+// produce 成功記回的合法 review 欄位(full 需附落盤的 reviewer 結論檔)
+const REVIEW = { depth: 'full', record: 'orchestrator/review.md' };
 
 // 與 decide.test.js 同形的小 manifest,外加 cli 需要的 orchestration 區塊。
 function fixture(over = {}) {
@@ -59,7 +61,9 @@ function fixture(over = {}) {
       'test-unit': { id: 'test-unit', verifies: 'spec-4', runner: 'unit-tests', kind: 'unit', status: 'pending', last_fail: null },
     },
     env: {},
-    orchestration: { turn: 0, maxTurns: 30, noProgressK: 3, failSignals: [] },
+    // leases 預發派本 fixture 會用到的 action(等同已跑過 next-all);lease 機制本身另有專測。
+    orchestration: { turn: 0, maxTurns: 30, noProgressK: 3, failSignals: [],
+                     leases: ['produce:spec-1', 'produce:spec-2', 'produce:spec-4', 'test:test-unit'] },
   }, over);
 }
 
@@ -71,7 +75,7 @@ test('produce 成功:outputs 記回、turn+1、failSignals 清空', () => {
   const m = fixture();
   m.orchestration.failSignals = ['spec-4:code'];   // 殘留的震盪窗口
   const mp = writeJson('m.json', m);
-  const rp = writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'] });
+  const rp = writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: REVIEW });
   const r = run('produce', mp, 'spec-4', rp);
   assert.equal(r.code, 0, r.err);
   assert.equal(r.out.status, 'produced');
@@ -86,7 +90,7 @@ test('produce 成功:只清「自己」的 failSignal,別 target 的震盪訊號
   // 兩個 target 各自累積中:spec-4 是這次要產的,spec-2 是別處正在震盪的
   m.orchestration.failSignals = ['spec-2:spec', 'spec-4:code', 'spec-2:spec'];
   const mp = writeJson('m.json', m);
-  const r = run('produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'] }));
+  const r = run('produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: REVIEW }));
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(readJson(mp).orchestration.failSignals, ['spec-2:spec', 'spec-2:spec'],
     'spec-4 的進度只清 spec-4 的訊號;spec-2 的震盪證據不可被洗掉');
@@ -119,7 +123,7 @@ test('produce 守門(forbid_outputs):rejected 揭露 + failSignal 照記', () =>
   const m = fixture();
   m.specs['spec-4'].forbid_outputs = ['*.test.*'];
   const mp = writeJson('m.json', m);
-  const rp = writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx', 'src/Foo.test.jsx'] });
+  const rp = writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx', 'src/Foo.test.jsx'], review: REVIEW });
   const r = run('produce', mp, 'spec-4', rp);
   assert.equal(r.code, 0, r.err);
   assert.equal(r.out.rejected, 'output_guard');
@@ -133,7 +137,7 @@ test('produce 守門(allowed_outputs):白名單外產出 rejected + failSignal �
   const m = fixture();
   m.specs['spec-4'].allowed_outputs = ['src/layout/Sidebar.tsx', 'orchestrator/*'];
   const mp = writeJson('m.json', m);
-  const rp = writeJson('r.json', { ok: true, outputs: ['src/layout/Sidebar.tsx', 'src/layout/Header.tsx'] });
+  const rp = writeJson('r.json', { ok: true, outputs: ['src/layout/Sidebar.tsx', 'src/layout/Header.tsx'], review: REVIEW });
   const r = run('produce', mp, 'spec-4', rp);
   assert.equal(r.code, 0, r.err);
   assert.equal(r.out.rejected, 'output_guard');
@@ -305,7 +309,7 @@ test('review gate:produce 成功 → review_gate 揭露 + clarify 帶產出檔;r
   m.specs['spec-2'].status = 'pending';
   m.specs['spec-4'].status = 'pending';
   const mp = writeJson('m.json', m);
-  let r = run('produce', mp, 'spec-1', writeJson('r.json', { ok: true, outputs: ['orchestrator/triage.md'] }));
+  let r = run('produce', mp, 'spec-1', writeJson('r.json', { ok: true, outputs: ['orchestrator/triage.md'], review: REVIEW }));
   assert.equal(r.code, 0, r.err);
   assert.equal(r.out.review_gate, true, '要對 orchestrator 揭露「這不是失敗,是查看點」');
   assert.ok(r.out.clarify.includes('triage.md'), 'clarify 要帶產出檔路徑');
@@ -388,15 +392,69 @@ test('requires_test:validate 擋在凍結前,produce 記回擋第二道', () => 
   m2.specs['spec-2'].requires_test = true;
   m2.specs['spec-4'].status = 'pending';
   const mp2 = writeJson('m.json', m2);
-  r = run('produce', mp2, 'spec-2', writeJson('r.json', { ok: true, outputs: ['orchestrator/triage.md'] }));
+  r = run('produce', mp2, 'spec-2', writeJson('r.json', { ok: true, outputs: ['orchestrator/triage.md'], review: REVIEW }));
   assert.equal(r.code, 1, 'requires_test 卻無 test 的 produce 應被擋');
   assert.equal(readJson(mp2).specs['spec-2'].status, 'pending');
   // 掛上 test 後同樣的記回就能過
   m2.tests['test-spec2'] = { id: 'test-spec2', verifies: 'spec-2', runner: 'unit-tests', kind: 'unit', status: 'pending', last_fail: null };
   const mp3 = writeJson('m.json', m2);
-  r = run('produce', mp3, 'spec-2', writeJson('r.json', { ok: true, outputs: ['orchestrator/triage.md'] }));
+  r = run('produce', mp3, 'spec-2', writeJson('r.json', { ok: true, outputs: ['orchestrator/triage.md'], review: REVIEW }));
   assert.equal(r.code, 0, r.err);
   assert.equal(r.out.status, 'produced');
+});
+
+test('review_map defer:validate 要求 requires_test:true 且有 test verifies', () => {
+  const m = fixture({
+    planning: { review_map: [
+      { task: 'spec-2', risk: 'low', review_depth: 'defer-until-signal', split_reason: '低風險', upgrade_triggers: ['test fail'], reason: '有機器驗證' },
+    ] },
+  });
+  let mp = writeJson('m.json', m);
+  let r = run('validate', mp);
+  assert.equal(r.code, 1, 'defer 卻沒有 requires_test/test 應被 validate 擋下');
+  assert.ok(JSON.parse(r.stdout).errors.some(e => e.includes('defer-until-signal') && e.includes('spec-2')));
+
+  m.specs['spec-2'].requires_test = true;
+  m.tests['test-spec2'] = { id: 'test-spec2', verifies: 'spec-2', runner: 'unit-tests', kind: 'unit', status: 'pending', last_fail: null };
+  mp = writeJson('m.json', m);
+  r = run('validate', mp);
+  assert.equal(r.code, 0, r.stdout || r.err);
+});
+
+test('review_map validate:非 array 或非 object 項目 → ok:false、exit 1', () => {
+  let mp = writeJson('m.json', fixture({ planning: { review_map: { task: 'spec-2' } } }));
+  let r = run('validate', mp);
+  assert.equal(r.code, 1);
+  assert.ok(JSON.parse(r.stdout).errors.some(e => e.includes('planning.review_map 必須是 array')));
+
+  mp = writeJson('m.json', fixture({ planning: { review_map: ['bad-entry'] } }));
+  r = run('validate', mp);
+  assert.equal(r.code, 1);
+  assert.ok(JSON.parse(r.stdout).errors.some(e => e.includes('planning.review_map 含非 object')));
+});
+
+test('review_map validate:task 必須存在、review_depth 必須合法', () => {
+  const mp = writeJson('m.json', fixture({ planning: { review_map: [
+    { task: 'spec-missing', risk: 'low', review_depth: 'full', split_reason: 'x', upgrade_triggers: [], reason: 'x' },
+    { task: 'spec-4', risk: 'low', review_depth: 'light', split_reason: 'x', upgrade_triggers: [], reason: 'x' },
+  ] } }));
+  const r = run('validate', mp);
+  assert.equal(r.code, 1);
+  const errors = JSON.parse(r.stdout).errors;
+  assert.ok(errors.some(e => e.includes('review_map 指向不存在的 spec「spec-missing」')));
+  assert.ok(errors.some(e => e.includes('review_depth') && e.includes('light')));
+});
+
+test('tier validate:只接受 high / medium / low', () => {
+  const m = fixture();
+  m.specs['spec-4'].tier = 'ultra';
+  const mp = writeJson('m.json', m);
+  const r = run('validate', mp);
+  assert.equal(r.code, 1);
+  assert.ok(JSON.parse(r.stdout).errors.some(e => e.includes('tier') && e.includes('ultra')));
+  m.specs['spec-4'].tier = 'medium';
+  const mp2 = writeJson('m2.json', m);
+  assert.equal(run('validate', mp2).code, 0);
 });
 
 test('test 驗證:pass 無 evidence / unit 缺實跑計數 → exit 1(沒實跑不得報 pass)', () => {
@@ -444,6 +502,172 @@ test('env_patch 白名單:patch 身份欄位 → exit 1;白名單內欄位照常
   r = run('test', mp, 'test-unit', writeJson('r.json', { pass: false, altitude: 'environment', reason: 'route 不足', env_patch: { e2eReady: false } }));
   assert.equal(r.code, 0, r.err);
   assert.equal(readJson(mp).env.e2eReady, false, '白名單內欄位照常 patch');
+});
+
+// ── 協議強制:action lease(記回只接受 next / next-all 發派過的 action)────────
+
+test('lease:未經發派的 produce → exit 1、manifest 不動;next 發派後同一記回放行', () => {
+  const m = fixture();
+  m.orchestration.leases = [];
+  const mp = writeJson('m.json', m);
+  const rp = writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: REVIEW });
+  let r = run('produce', mp, 'spec-4', rp);
+  assert.equal(r.code, 1, '未發派的 action 應被擋');
+  assert.ok(r.err.includes('leases'));
+  assert.equal(readJson(mp).orchestration.turn, 0, '回合不應增加');
+  r = run('next', mp);   // spec-4 pending 且依賴齊 → 發派 produce:spec-4
+  assert.equal(r.code, 0, r.err);
+  assert.ok(readJson(mp).orchestration.leases.includes('produce:spec-4'), 'next 應把發派寫進 leases');
+  r = run('produce', mp, 'spec-4', rp);
+  assert.equal(r.code, 0, r.err);
+});
+
+test('lease:記回即消耗,同一 produce 不能記兩次;下一輪授權由記回後的狀態重算', () => {
+  const mp = writeJson('m.json', fixture());
+  const rp = writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: REVIEW });
+  let r = run('produce', mp, 'spec-4', rp);
+  assert.equal(r.code, 0, r.err);
+  const after = readJson(mp);
+  assert.ok(!after.orchestration.leases.includes('produce:spec-4'), '成功記回應消耗授權');
+  assert.ok(after.orchestration.leases.includes('test:test-unit'), '記回後應重算出下一輪授權');
+  r = run('produce', mp, 'spec-4', rp);
+  assert.equal(r.code, 1, '沒有新發派不得重記');
+});
+
+test('lease:produce 失敗 → 重做授權立即重發(不必先繞一趟 next)', () => {
+  const mp = writeJson('m.json', fixture());
+  const r = run('produce', mp, 'spec-4', writeJson('r.json', { ok: false, reason: 'x', fix_target: 'code' }));
+  assert.equal(r.code, 0, r.err);
+  assert.ok(readJson(mp).orchestration.leases.includes('produce:spec-4'), 'failed → decideAll 重發重做授權');
+});
+
+test('lease:發派整批重發,上一輪殘留的過時授權作廢', () => {
+  const m = fixture();
+  // 殘留授權:spec-1 / spec-2 已 verified、test-unit 的 spec 還沒 produced,此刻都不該被授權
+  m.orchestration.leases = ['produce:spec-1', 'produce:spec-2', 'test:test-unit'];
+  const mp = writeJson('m.json', m);
+  let r = run('next', mp);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(readJson(mp).orchestration.leases, ['produce:spec-4'], '發派後 leases = 此刻 decideAll 授權的集合');
+  r = run('produce', mp, 'spec-1', writeJson('r.json', { ok: true, outputs: ['orchestrator/triage.md'], review: REVIEW }));
+  assert.equal(r.code, 1, '殘留的過時授權不得再用來記回');
+  assert.ok(r.err.includes('leases'));
+});
+
+test('lease:平行批次裡某項觸發停點,其他 in-flight 結果仍可記回', () => {
+  const m = {
+    specs: {
+      'spec-a': { id: 'spec-a', skill: 'w', status: 'produced', depends_on: [], outputs: [], last_failure: null, fix_target: null },
+      'spec-b': { id: 'spec-b', skill: 'w', status: 'produced', depends_on: [], outputs: [], last_failure: null, fix_target: null },
+    },
+    tests: {
+      'test-a': { id: 'test-a', verifies: 'spec-a', runner: 'unit', kind: 'unit', status: 'pending', last_fail: null },
+      'test-b': { id: 'test-b', verifies: 'spec-b', runner: 'unit', kind: 'unit', status: 'pending', last_fail: null },
+    },
+    env: {},
+    orchestration: { turn: 0, maxTurns: 30, noProgressK: 3, failSignals: [], leases: [] },
+  };
+  const mp = writeJson('m.json', m);
+  let r = run('next-all', mp);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(readJson(mp).orchestration.leases.sort(), ['test:test-a', 'test:test-b']);
+  r = run('test', mp, 'test-a', writeJson('r.json', { pass: false, altitude: 'environment', reason: 'runner 起不來' }));
+  assert.equal(r.code, 0, r.err);
+  // 停點(clarify)不是發派:不重發、不清授權——test-b 的 in-flight 授權必須活過這次 next-all
+  r = run('next-all', mp);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out.type, 'clarify');
+  assert.ok(readJson(mp).orchestration.leases.includes('test:test-b'), '停點不得作廢 in-flight 授權');
+  r = run('test', mp, 'test-b', writeJson('r.json', { pass: true, evidence: EV_PASS }));
+  assert.equal(r.code, 0, '停點不作廢其他 in-flight 授權:' + (r.err || ''));
+  assert.equal(readJson(mp).specs['spec-b'].status, 'verified');
+});
+
+// ── review 欄位硬驗:審查深度合規 + reviewer 結論落盤 ───────────────────────
+
+test('review:成功記回缺 review 欄位 → exit 1、manifest 不動', () => {
+  const mp = writeJson('m.json', fixture());
+  const r = run('produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'] }));
+  assert.equal(r.code, 1, '沒交代審查的成功記回應被擋');
+  assert.ok(r.err.includes('review'));
+  assert.equal(readJson(mp).specs['spec-4'].status, 'pending', 'manifest 不應被污染');
+});
+
+test('review:未列 review map 預設 full(focused 不足);record 檔不存在 → exit 1', () => {
+  const mp = writeJson('m.json', fixture());
+  let r = run('produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: { depth: 'focused', record: 'orchestrator/review.md' } }));
+  assert.equal(r.code, 1, 'fail-closed:未列 review map 的 spec 預設 full');
+  assert.ok(r.err.includes('full'));
+  r = run('produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: { depth: 'full', record: 'orchestrator/ghost-review.md' } }));
+  assert.equal(r.code, 1, 'reviewer 結論必須真的落盤');
+  assert.ok(r.err.includes('ghost-review.md'));
+});
+
+test('review:map 標 defer 且有機器護欄 → defer 合法、last_review 落盤;重做一律升級 full', () => {
+  const deferMap = { planning: { review_map: [
+    { task: 'spec-4', risk: 'low', review_depth: 'defer-until-signal', split_reason: 'x', upgrade_triggers: ['test fail'], reason: 'x' },
+  ] } };
+  const m = fixture(deferMap);
+  m.specs['spec-4'].requires_test = true;
+  const mp = writeJson('m.json', m);
+  let r = run('produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: { depth: 'defer-until-signal' } }));
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(readJson(mp).specs['spec-4'].last_review, { depth: 'defer-until-signal', record: null });
+
+  const m2 = fixture(deferMap);
+  m2.specs['spec-4'].requires_test = true;
+  m2.specs['spec-4'].status = 'failed';
+  m2.specs['spec-4'].last_failure = 'test fail 後重做';
+  const mp2 = writeJson('m.json', m2);
+  r = run('produce', mp2, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: { depth: 'defer-until-signal' } }));
+  assert.equal(r.code, 1, '重做中的 spec 一律升級 full,defer 不合法');
+  assert.ok(r.err.includes('full'));
+});
+
+test('review:defer 但 spec 無 requires_test / 無 test → exit 1(沒有機器護欄不得略過 reviewer)', () => {
+  const m = fixture({ planning: { review_map: [
+    { task: 'spec-2', risk: 'low', review_depth: 'defer-until-signal', split_reason: 'x', upgrade_triggers: [], reason: 'x' },
+  ] } });
+  m.specs['spec-2'].status = 'pending';
+  m.specs['spec-4'].status = 'pending';
+  const mp = writeJson('m.json', m);
+  const r = run('produce', mp, 'spec-2', writeJson('r.json', { ok: true, outputs: ['orchestrator/triage.md'], review: { depth: 'defer-until-signal' } }));
+  assert.equal(r.code, 1);
+  assert.ok(r.err.includes('requires_test'));
+});
+
+// ── 委派 brief:next 輸出附機械派工輸入 ─────────────────────────────
+
+test('next:action 附 brief(上游 outputs / 重做脈絡 / required review depth)', () => {
+  const m = fixture();
+  m.specs['spec-2'].outputs = ['orchestrator/triage.md'];
+  m.specs['spec-4'].status = 'failed';
+  m.specs['spec-4'].last_failure = '上次接線錯';
+  const mp = writeJson('m.json', m);
+  const r = run('next', mp);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out.type, 'produce');
+  assert.equal(r.out.spec, 'spec-4');
+  assert.deepEqual(r.out.brief.depends_on_outputs, { 'spec-2': ['orchestrator/triage.md'] });
+  assert.equal(r.out.brief.last_failure, '上次接線錯');
+  assert.equal(r.out.brief.review.required_depth, 'full', 'last_failure 非空 → 重做升級 full');
+});
+
+// ── resume 收緊:只能解除引擎停下的對象 ─────────────────────────────
+
+test('resume:非引擎停下的對象 → exit 1;震盪 clarify 指向的 failed spec 可 resume', () => {
+  const mp = writeJson('m.json', fixture());
+  let r = run('resume', mp, 'spec-4', writeJson('a.json', { answer: '直接重做' }));
+  assert.equal(r.code, 1, 'pending spec 不是 clarify 對象,resume 會變成重做後門');
+  assert.ok(r.err.includes('clarify'));
+
+  const m2 = fixture();
+  m2.specs['spec-4'].status = 'failed';
+  m2.orchestration.failSignals = ['spec-4:code', 'spec-4:code', 'spec-4:code'];
+  const mp2 = writeJson('m.json', m2);
+  r = run('resume', mp2, 'spec-4', writeJson('a.json', { answer: '改用方案 B' }));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(readJson(mp2).specs['spec-4'].status, 'pending');
 });
 
 // ── validate:懸空參照與環 ──────────────────────────────────────
