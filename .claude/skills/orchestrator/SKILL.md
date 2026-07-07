@@ -112,7 +112,7 @@ node "$SKILL_DIR/scripts/cli.js" validate $MANIFEST                       # boot
    - 平行時:把 `next-all` 這批 `actions` 的 produce/test 在同一回合一起委派、同時跑,等整批回來。
    - **收結果,序列記回**:每個子代理回報後,你依它回報末尾的 JSON 區塊覆核轉錄(見「結果檔格式」)寫成一個 `result.json`,逐一 `cli.js produce` / `cli.js test` 記回——一個一個寫,不要平行寫。
    - `clarify` → 停下把 `question` 問使用者(不可自動重跑、不可臆測答案)。拿到答覆後寫 `answer.json`(`{ "answer": "<使用者答覆>", "reopen": "pending" }`;要保留原失敗脈絡讓 worker 針對性重做時用 `"failed"`)→ `cli.js resume $MANIFEST <clarify 回的 spec 或 test> answer.json` → 回第 2 步。(`kind:"environment"` 回的是 `test`,resume 後只重跑該 test、不重做任何 spec;其餘回的是 `spec`。)
-     - **`kind:"review"`(人類 gate)是 clarify 的特例,不是失敗**:該 spec 宣告了 `review_gate: true`(本引擎用在 intake),引擎在它產出成功後停下,等使用者查看再繼續。先跑 `node "$SKILL_DIR/scripts/gate-view.js" $MANIFEST` 取得一頁式渲染(任務波次、每節點裁判類型、no-judge / defer 標記與升級訊號、警示清單),把它連同 clarify 裡列的產出檔路徑與重點摘要——**尤其是驗證地圖與 review map**——給使用者,討論到他明確表態。同意續跑 → `answer.json` 寫 `{ "approve": true }` → `cli.js resume`(spec 不重做、直接進 produced/verified);要求修改 → 寫 `{ "answer": "<修改意見>" }` → `cli.js resume`(reopen 重做,意見成為修補指示),重做成功後引擎再次 gate,直到使用者同意。沒有使用者明確同意,`approve` 不合法,嚴禁自行寫 `{"approve":true}` 跳過人類 gate。
+     - **`kind:"review"`(人類 gate)是 clarify 的特例,不是失敗**:該 spec 宣告了 `review_gate: true`(本引擎用在 intake),引擎在它產出成功後停下,等使用者查看再繼續。先跑 `node "$SKILL_DIR/scripts/gate-view.js" $MANIFEST` 取得一頁式渲染(任務波次、每節點裁判類型、no-judge / defer 標記與升級訊號、警示清單),把它連同 clarify 裡列的產出檔路徑與重點摘要——**尤其是驗證地圖與 review map**——給使用者,討論到他明確表態。同意續跑 → `answer.json` 寫 `{ "approve": true }` → `cli.js resume`(spec 不重做、直接進 produced/verified);要求修改 → 寫 `{ "answer": "<修改意見>" }` → `cli.js resume`(reopen 重做,意見成為修補指示),重做成功後引擎再次 gate,直到使用者同意。同意來源只能是使用者——即時表態,或由呼叫端帶進、範圍涵蓋本 run 的事前明示同意;兩者皆無時 `approve` 不合法,嚴禁自行寫 `{"approve":true}` 跳過人類 gate。
    - `done` → 結束,把 `done` 回交呼叫端。不要在 orchestrator 內自行 commit / teardown;若本輪是由 `task-flow` 啟動,由 task-flow 的收尾策略接手。
    - `halt` → 結束,回報 reason(達回合上限 maxTurns)。
 4. **立即回到第 2 步**(同一回合內接續);回合只在 `done` / `halt` / `clarify` 三種 action 上結束(`clarify` 不是終局,`resume` 後續跑)。
@@ -217,6 +217,6 @@ test 結果(兩個正交軸 `altitude` + `blame`):
 
 - 重做 `failed` spec 時已把 `last_failure` 與 `fix_target` 當修補指示交給 worker,沒讓它盲目重跑
 - 每份 `result.json` 都從 worker 回報的 JSON 區塊覆核轉錄而來(blame 存在、altitude 合法、pass 附實跑 evidence),沒有自由創作,也沒替沒附證據的 pass 補造 evidence
-- 收到 `clarify` 時已把 `question` 原樣問使用者、未臆測答案;`kind:"review"` 時已附上 `gate-view.js` 的一頁渲染,並把分析書 / 任務清單 / **驗證地圖 / review map** 交給使用者討論到明確表態,`{"approve":true}` 只在使用者同意後才寫
+- 收到 `clarify` 時已把 `question` 原樣問使用者、未臆測答案;`kind:"review"` 時已附上 `gate-view.js` 的一頁渲染,並把分析書 / 任務清單 / **驗證地圖 / review map** 交給使用者討論到明確表態,`{"approve":true}` 只在取得使用者同意(即時表態,或呼叫端帶進的事前明示)後才寫
 - 委派 `test` 時已要求 test worker 先依 `runtime-preflight` 準備環境;能機器驗的節點都實跑
 - 全程只在 `clarify` / `done` / `halt` 三種停點結束過回合;`done` 後未自行 commit / teardown(交回 `task-flow`)

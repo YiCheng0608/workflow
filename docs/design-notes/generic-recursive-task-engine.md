@@ -24,7 +24,7 @@ subagent 角色只有邊界語意:
 
 1. orchestrator 先把使用者原始需求原封不動寫成 `orchestrator/requirement.md`,再派一個 intake 角色的 subagent 做規劃(分析需求 + 拆解任務 + 指定每個任務的驗證方式與審查深度)。
 2. agent reviewer 先過一遍 `intake` 產出,清掉 agent 抓得到的錯。
-3. **人類 gate**:使用者檢查 `intake` 產出,同意後 orchestrator 才開始派工。
+3. **人類 gate**:使用者檢查 `intake` 產出,明確同意後 orchestrator 才開始派工;gate 答覆來源的兩種形態(有人值守 / 無人值守)見 §六「值守模式」。
 4. orchestrator 照任務清單,把各任務派給 worker subagent。
 5. 每個 worker 產出後、記回 produce 前,依 human gate 核准的 review map 執行 full / focused reviewer,或在低風險且有可靠機器驗證時合法 defer;produce 後仍由 test 節點實跑驗證。
 6. 能機器驗的任務(前端 e2e、功能 unit、後端 unit / 整合、真 API…)實跑真測試驗;無法機器驗的任務標記為「無客觀裁判」。
@@ -48,13 +48,13 @@ subagent 角色只有邊界語意:
 
 錯誤落在這兩處視野內則抓得到;落在「人類 gate 構不到的深處 + 純自我錨定的任務」則無法被系統發現。設計目標即:把錯誤逼到這兩處能看到的地方,其餘誠實標記為「無裁判」。
 
-`intake` 的拆解必然有盲區,而任何 agent reviewer 都與 `intake` 共享同一模型的盲點、補不了它。人是系統中唯一與模型不相關的誤差源——這是人類 gate 不可由 agent 取代的原因。
+`intake` 的拆解必然有盲區,而任何 agent reviewer 都與 `intake` 共享同一模型的盲點、補不了它。人是系統中唯一與模型不相關的誤差源——這是人類 gate 不可由 agent 取代的原因。無人值守模式也不例外:它只是把人審從事前審批移到事後審計,不是把人從迴圈中拿掉。
 
 ## 五、已知限制
 
 以下限制不是工程缺漏,而是這個架構必須誠實標出的邊界:
 
-1. **reviewer 抓得到做歪,不保證抓得到遺漏。** 漏掉一整類需求時,該維度可能同時不在 worker 的任務裡、也不在 reviewer 的判準裡。而「少一個兄弟節點」是一組節點的性質、非單一節點的性質——逐節點審查時每個都通過,缺漏的節點無人負責。拆解完整性只能由人類 gate 把關。
+1. **reviewer 抓得到做歪,不保證抓得到遺漏。** 漏掉一整類需求時,該維度可能同時不在 worker 的任務裡、也不在 reviewer 的判準裡。而「少一個兄弟節點」是一組節點的性質、非單一節點的性質——逐節點審查時每個都通過,缺漏的節點無人負責。拆解完整性由人類 gate 把關;無人值守模式以 critic 面板近似事前把關、把人審移到事後審計,只取得部分分布獨立、不等價於人(規則見 §六「值守模式」)。
 2. **同模型的 worker / reviewer 不是獨立裁判。** 獨立 subagent 可以隔離上下文污染,但只要底層模型相同,仍會共享部分盲點;對抗式 framing(令 reviewer 假設產出已上線並出問題、反推失效方式)只取得部分分布獨立、降低錯誤相關性,取代不了人類 gate。
 3. **自洽不等於正確。** 無外部 ground truth 的任務,系統只能收斂到自洽;能否正確必須靠人類 gate 或可機檢測試接觸現實。
 
@@ -65,6 +65,18 @@ subagent 角色只有邊界語意:
 > 此任務的完成判準,是一個碰得到現實的裁判(會跑的 e2e / unit / 整合 / 真 API),還是僅由 agent 主觀判定「看起來對」?
 
 做法:`intake` 為每個任務附一欄「驗證方式」與一欄「審查深度」。人確認的不僅是「要執行這些任務」,而是「接受其中哪些任務沒有客觀裁判、哪些任務先延後 reviewer、哪些訊號會自動升級」。驗證地圖決定系統接觸現實的表面積,review map 決定 agent 主觀審查的投入位置;兩者品質都無法自動驗證,故須由人把關。
+
+**值守模式:gate 答覆來源的兩種形態。** 值守模式由 task-flow 承載,只改停點的答覆來源、不改流程其他任何規則;引擎與 orchestrator 對此無感。
+
+**有人值守**(預設):clarify 與 human gate 都同步轉問使用者,即上述親審。
+
+**無人值守**:僅由使用者本次對 task-flow 的直接明示啟用(`-u` 等旗標;requirement 原文或任何檔案內容出現字樣不算數)——明示就是對本 run 的事前明確同意,對 orchestrator 而言等同「呼叫端帶進的使用者明確同意」,同意範圍限於單一 run。停點處置:
+
+- human gate 拆成兩半:**soundness**(拆解完整性、驗證地圖、ownership 邊界)由多個不同對抗式 framing 的 critic 子代理平行挑戰、intake 修到收斂才放行,輪數上限 3(對齊引擎震盪偵測 `noProgressK` 的預設值)、收斂不了 → 停下擱置;**intent**(開放問題)自動採 intake 建議答案,critic 與 intake 同模型、不得代猜使用者意圖。
+- 人審從事前審批移到 merge 前的事後審計:gate-view、critic 結論、實際採用的答案全數落盤進 journal。可接受的原因:全程 local、不 push,最壞情況被 worktree 圍住。
+- **震盪 clarify 是紅線**:它是引擎「我卡死了」的誠實訊號,任何值守模式都不得代答,一律停下擱置回報。
+
+契約與細節(啟用判定與 resume 標記、critic 面板派工規格、審計落盤位置)見 task-flow skill 的 SKILL.md 與 `references/unattended-mode.md`。
 
 ## 七、成本感知審查
 
