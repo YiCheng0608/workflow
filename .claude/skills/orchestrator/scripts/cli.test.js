@@ -26,16 +26,18 @@ function writeJson(name, obj) {
 }
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'));
 // 跑 cli:成功回 { code:0, out:<stdout JSON> },失敗回 { code:非0, err:<stderr> }
-// cwd 設在 tmp:cli 會對 outputs 做磁碟存在性驗證,宣稱的檔要相對於執行目錄真的存在。
-function run(...args) {
+// cwd 預設在 tmp(非 git repo → 未申報修改硬驗自動跳過);未申報修改的測試用 runIn 指定 git repo。
+// cli 會對 outputs 做磁碟存在性驗證,宣稱的檔要相對於執行目錄真的存在。
+function runIn(cwd, ...args) {
   try {
     // stderr 用 pipe 捕捉(預設 inherit 會把預期中的「✗ 不合法」噪音漏到測試輸出)
-    const stdout = execFileSync(process.execPath, [CLI, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], cwd: tmp });
+    const stdout = execFileSync(process.execPath, [CLI, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], cwd });
     return { code: 0, out: JSON.parse(stdout) };
   } catch (e) {
     return { code: e.status, err: String(e.stderr || ''), stdout: String(e.stdout || '') };
   }
 }
+const run = (...args) => runIn(tmp, ...args);
 // outputs 存在性守門:測試裡宣稱的產出檔要先真的寫到 tmp 磁碟
 function touch(rel) {
   const p = path.join(tmp, rel);
@@ -708,6 +710,126 @@ test('validate:test 依賴成環 → 報「test 依賴成環」(decide 對此只
   const r = run('validate', mp);
   assert.equal(r.code, 1);
   assert.ok(JSON.parse(r.stdout).errors.some(e => e.includes('test 依賴成環')));
+});
+
+// ── 未申報修改硬驗:git status 與回報的 outputs / deleted 比對 ───────────────
+// 這組測試需要真 git repo 當 cwd(tmp 不是 git repo,其餘測試自動跳過此驗)。
+
+function makeGitRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-cli-git-'));
+  const git = (...a) => execFileSync('git', ['-C', dir, ...a], { stdio: 'ignore' });
+  git('init', '-q');
+  git('config', 'user.email', 'test@test');
+  git('config', 'user.name', 'test');
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src/app.js'), 'base\n');
+  git('add', '.');
+  git('commit', '-qm', 'seed');
+  // orchestrator/ 過程目錄(review record 落盤處),守門應整個目錄忽略
+  fs.mkdirSync(path.join(dir, 'orchestrator'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'orchestrator/review.md'), '// reviewer 結論\n');
+  return dir;
+}
+function writeIn(dir, rel, content = '// stub\n') {
+  const p = path.join(dir, rel);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, content);
+}
+
+test('dirty 硬驗:worker 改了檔卻不回報 → exit 1、manifest 不動', () => {
+  const repo = makeGitRepo();
+  writeIn(repo, 'src/Foo.jsx');                                    // 有申報的新檔
+  fs.appendFileSync(path.join(repo, 'src/app.js'), 'sneaky\n');    // 未申報的修改
+  const mp = writeJson('m.json', fixture());
+  const r = runIn(repo, 'produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: REVIEW }));
+  assert.equal(r.code, 1, '未申報的修改應被擋');
+  assert.ok(r.err.includes('src/app.js'));
+  const after = readJson(mp);
+  assert.equal(after.specs['spec-4'].status, 'pending', 'manifest 不應被污染');
+  assert.equal(after.orchestration.turn, 0, '回合不應增加');
+});
+
+test('dirty 硬驗:修改全數申報、orchestrator/ 過程目錄不計 → 照常記回', () => {
+  const repo = makeGitRepo();
+  writeIn(repo, 'src/Foo.jsx');
+  writeIn(repo, 'orchestrator/notes.md');                          // 過程產物,不必申報
+  const mp = writeJson('m.json', fixture());
+  const r = runIn(repo, 'produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: REVIEW }));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out.status, 'produced');
+});
+
+test('dirty 硬驗:先前站已記回、尚未 commit 的 outputs → 不算本站未申報', () => {
+  const repo = makeGitRepo();
+  fs.appendFileSync(path.join(repo, 'src/app.js'), 'earlier station\n');
+  writeIn(repo, 'src/Foo.jsx');
+  const m = fixture();
+  m.specs['spec-2'].outputs = ['src/app.js'];                      // 上一站的產出,同一 run 內還沒 commit
+  const mp = writeJson('m.json', m);
+  const r = runIn(repo, 'produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: REVIEW }));
+  assert.equal(r.code, 0, r.err);
+});
+
+test('dirty 硬驗:in-flight lease 的 allowed_outputs 範圍內豁免;無 ownership 不豁免', () => {
+  const repo = makeGitRepo();
+  writeIn(repo, 'src/Foo.jsx');
+  writeIn(repo, 'src/layout/Sidebar.tsx');                         // 平行站 spec-5 in-flight 已落盤的檔
+  const m = fixture();
+  m.specs['spec-5'] = { id: 'spec-5', skill: 'w', status: 'pending', depends_on: ['spec-2'], outputs: [], last_failure: null, fix_target: null, allowed_outputs: ['src/layout/*'] };
+  m.orchestration.leases.push('produce:spec-5');
+  const mp = writeJson('m.json', m);
+  let r = runIn(repo, 'produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: REVIEW }));
+  assert.equal(r.code, 0, r.err);
+
+  const repo2 = makeGitRepo();
+  writeIn(repo2, 'src/Foo.jsx');
+  writeIn(repo2, 'src/layout/Sidebar.tsx');
+  const m2 = fixture();
+  m2.specs['spec-5'] = { id: 'spec-5', skill: 'w', status: 'pending', depends_on: ['spec-2'], outputs: [], last_failure: null, fix_target: null };
+  m2.orchestration.leases.push('produce:spec-5');
+  const mp2 = writeJson('m.json', m2);
+  r = runIn(repo2, 'produce', mp2, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: REVIEW }));
+  assert.equal(r.code, 1, '沒宣告 allowed_outputs ownership 的 in-flight 髒檔不得豁免');
+  assert.ok(r.err.includes('Sidebar.tsx'));
+});
+
+test('deleted 申報:刪檔未申報 → exit 1;申報 deleted → 照常記回', () => {
+  const repo = makeGitRepo();
+  writeIn(repo, 'src/Foo.jsx');
+  fs.rmSync(path.join(repo, 'src/app.js'));
+  const mp = writeJson('m.json', fixture());
+  let r = runIn(repo, 'produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: REVIEW }));
+  assert.equal(r.code, 1, '未申報的刪檔應被擋');
+  assert.ok(r.err.includes('src/app.js'));
+  r = runIn(repo, 'produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], deleted: ['src/app.js'], review: REVIEW }));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out.status, 'produced');
+});
+
+test('deleted 申報:宣告刪了但檔還在 / 刪到 ownership 外 → exit 1', () => {
+  const repo = makeGitRepo();
+  writeIn(repo, 'src/Foo.jsx');
+  const mp = writeJson('m.json', fixture());
+  let r = runIn(repo, 'produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], deleted: ['src/app.js'], review: REVIEW }));
+  assert.equal(r.code, 1, '宣告刪除但檔仍存在應被擋');
+  assert.ok(r.err.includes('src/app.js'));
+
+  const repo2 = makeGitRepo();
+  writeIn(repo2, 'src/Foo.jsx');
+  fs.rmSync(path.join(repo2, 'src/app.js'));
+  const m2 = fixture();
+  m2.specs['spec-4'].allowed_outputs = ['src/Foo.jsx'];
+  const mp2 = writeJson('m.json', m2);
+  r = runIn(repo2, 'produce', mp2, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], deleted: ['src/app.js'], review: REVIEW }));
+  assert.equal(r.code, 1, '刪 ownership 外的檔應被擋');
+  assert.ok(r.err.includes('src/app.js'));
+});
+
+test('produce 驗證:deleted 不是 string 陣列 → exit 1', () => {
+  const mp = writeJson('m.json', fixture());
+  const r = run('produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], deleted: 'src/app.js', review: REVIEW }));
+  assert.equal(r.code, 1);
+  assert.ok(r.err.includes('deleted'));
 });
 
 console.log(`\n${pass} passed`);

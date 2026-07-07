@@ -13,7 +13,8 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { decide, decideAll, applyProduce, applyTestResult, applyResume, applyResumeEnv, altitudeOf, blameTargetId, specForFailedTest } = require('./decide');
+const { execFileSync } = require('child_process');
+const { decide, decideAll, applyProduce, applyTestResult, applyResume, applyResumeEnv, altitudeOf, blameTargetId, specForFailedTest, forbiddenOutputs, disallowedOutputs } = require('./decide');
 
 function load(p) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); }
@@ -161,6 +162,9 @@ function validateProduceResult(m, specId, r) {
   } else if (r.outputs !== undefined && (!Array.isArray(r.outputs) || r.outputs.some(o => typeof o !== 'string'))) {
     errs.push('outputs 必須是 string 陣列');
   }
+  if (r.ok !== false && r.deleted !== undefined && (!Array.isArray(r.deleted) || r.deleted.some(o => typeof o !== 'string'))) {
+    errs.push('deleted 必須是 string 陣列(本站實際刪除的檔路徑)');
+  }
   return errs;
 }
 function validateTestResult(m, testId, r) {
@@ -276,6 +280,46 @@ function validateReview(m, specId, r) {
   return errs;
 }
 
+// ── 未申報修改硬驗:outputs 存在性驗的是「回報的檔在磁碟上」,這裡驗反方向——磁碟上的
+// 實際修改全部有申報。produce 成功記回時拿 git status(扣掉 orchestrator/ 過程目錄)與申報
+// 的 outputs / deleted 比對,沒被覆蓋的修改一律 exit 1、manifest 不動:worker「改了檔卻不
+// 回報」在這裡被擋下。cwd 不在 git repo 內時跳過(引擎不假設任務一定在 git 專案裡)。
+function gitToplevel() {
+  try {
+    return fs.realpathSync(execFileSync('git', ['rev-parse', '--show-toplevel'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+  } catch { return null; }
+}
+// 髒檔清單:{ xy, rel },rel 一律相對 cwd(與 outputs 的路徑約定一致)。
+// -z + --no-renames:NUL 分隔、不做 rename 偵測,路徑不被引號轉義,機械可解析;
+// -uall:未追蹤目錄展開成逐檔,才對得上逐檔申報的 outputs。
+function dirtyEntries(toplevel, cwd) {
+  const raw = execFileSync('git', ['status', '--porcelain=v1', '-z', '-uall', '--no-renames'],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return raw.split('\0').filter(Boolean).map(rec => ({
+    xy: rec.slice(0, 2),
+    rel: path.relative(cwd, path.join(toplevel, rec.slice(3))),
+  }));
+}
+function undeclaredChanges(m, specId, result) {
+  const toplevel = gitToplevel();
+  if (!toplevel) return [];
+  const cwd = fs.realpathSync(process.cwd());
+  const norm = p => path.relative(cwd, path.resolve(cwd, p));
+  const declared = new Set([...(result.outputs || []), ...(result.deleted || [])].map(norm));
+  // 同一 run 先前站已記回的 outputs 通常還沒 commit,一樣出現在 git status——不算本站未申報。
+  for (const s of Object.values(m.specs)) for (const o of (s.outputs || [])) declared.add(norm(o));
+  // 平行批次序列記回途中,其他 in-flight produce 的檔已落盤但還沒輪到記回:只豁免「該 spec 有
+  // 宣告 allowed_outputs ownership」的範圍——平行安全本就靠不重疊的 ownership(見 SKILL)。
+  const inflight = ((m.orchestration || {}).leases || [])
+    .filter(k => k.startsWith('produce:')).map(k => m.specs[k.slice('produce:'.length)])
+    .filter(s => s && s.id !== specId && Array.isArray(s.allowed_outputs) && s.allowed_outputs.length);
+  return dirtyEntries(toplevel, cwd).filter(e =>
+    e.rel !== 'orchestrator' && !e.rel.startsWith('orchestrator/') &&
+    !declared.has(e.rel) &&
+    !inflight.some(s => disallowedOutputs(s, [e.rel]).length === 0));
+}
+
 const [cmd, manifestPath, arg1, arg2] = process.argv.slice(2);
 if (!cmd || !manifestPath) {
   fail('用法: node cli.js <next|next-all|produce|test|resume> <manifest> [args]');
@@ -323,6 +367,15 @@ if (cmd === 'produce') {
     if (missing.length) fail(`outputs 裡的檔不存在於磁碟(worker 宣稱寫了但沒寫?manifest 未變動、回合未增):\n  - ${missing.join('\n  - ')}\n  (執行目錄:${process.cwd()};outputs 路徑應相對於專案工作目錄)`);
   }
 
+  // deleted 申報:刪檔沒有「檔案存在」可驗,反向驗——宣告刪了的檔必須真的不在磁碟上,
+  // 且刪除同樣受本站 ownership 約束(不得刪禁區 / 別站的檔)。
+  if (result.ok !== false && Array.isArray(result.deleted) && result.deleted.length) {
+    const remain = result.deleted.filter(p => fs.existsSync(path.resolve(p)));
+    if (remain.length) fail(`deleted 宣告已刪除的檔仍存在於磁碟(manifest 未變動、回合未增):\n  - ${remain.join('\n  - ')}`);
+    const offside = [...forbiddenOutputs(m.specs[arg1], result.deleted), ...disallowedOutputs(m.specs[arg1], result.deleted)];
+    if (offside.length) fail(`deleted 含本站 ownership 之外的檔(forbid_outputs / allowed_outputs 約束;manifest 未變動、回合未增):\n  - ${offside.join('\n  - ')}\n  請先還原誤刪的檔(git checkout)再修正 result.json,或照 produce 失敗記回`);
+  }
+
   // review 欄位硬驗(成功路徑):審查深度合規,且 full / focused 的 reviewer 結論檔真的落盤。
   if (result.ok !== false) {
     const rerrs = validateReview(m, arg1, result);
@@ -337,6 +390,18 @@ if (cmd === 'produce') {
   if (result.ok !== false && m.specs[arg1].requires_test === true &&
       !Object.values(m.tests || {}).some(t => t.verifies === arg1)) {
     fail(`spec「${arg1}」宣告 requires_test,但 manifest 沒有任何 test verifies 它——記回成功會被靜默跳過驗證。請補上 test 節點(或修正宣告)再記回(manifest 未變動、回合未增)`);
+  }
+
+  // 未申報修改硬驗(見 undeclaredChanges):磁碟上的實際 diff 必須全數被 outputs / deleted
+  // 申報覆蓋(或屬於已記回產出 / in-flight ownership),否則擋下不進 manifest。
+  if (result.ok !== false) {
+    const hidden = undeclaredChanges(m, arg1, result);
+    if (hidden.length) {
+      fail(`磁碟上有未申報的修改(git status 與回報的 outputs / deleted 對不上;manifest 未變動、回合未增):\n` +
+           hidden.map(e => `  - [${e.xy}] ${e.rel}`).join('\n') +
+           `\n  處置:本站產物 → 補進 outputs;本站刪的檔 → 補進 deleted;與本站無關的髒檔 → 還原(或先 commit / stash)再記回;` +
+           `執行期依賴目錄(node_modules / .venv 等)應由專案 .gitignore 忽略。(執行目錄:${process.cwd()})`);
+    }
   }
 
   applyProduce(m, arg1, result);

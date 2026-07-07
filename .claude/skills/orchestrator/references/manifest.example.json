@@ -20,7 +20,7 @@
     ]
   },
   "_note_requires_test": "requires_test:true 的 spec 必須有 test verifies 它;machine 任務一律填,no-judge 不填。",
-  "_note_output_guards": "allowed_outputs / forbid_outputs 用 glob 約束 worker 產出 ownership;命中違規時 applyProduce 會改判 code 失敗。",
+  "_note_output_guards": "allowed_outputs / forbid_outputs 用 glob 約束 worker 產出 ownership;命中違規時 applyProduce 會改判 code 失敗。produce 成功記回時 cli.js 另拿 git status(扣掉 orchestrator/)反向比對:未被 outputs / deleted 申報的磁碟修改直接拒收(非 git 目錄跳過);deleted 宣告的檔必須真的已不在磁碟且不越出本站 ownership。",
   "_note_review_gate": "review_gate:true 會在 produce 成功後停下等使用者 approve。本範本只給 intake 使用。",
   "_note_protocol": "orchestration.leases 由 cli.js next / next-all 發派時自動寫入;produce / test 只接受發派過的 action。produce 成功記回必帶 review 欄位:深度不得低於 review_map 要求(未列預設 full;last_failure 非空一律 full),full / focused 必附落盤的 reviewer 結論檔(record),引擎記回後存進 spec.last_review。",
   "_note_test_evidence": "test 結果的 evidence(pass:true 時必填、非空 object):實跑證據。若測試前需要 runtime 依賴,先依 runtime-preflight 準備 worktree 內可變投影並只共享安全 cache / store,再把 preflight 狀態併入 evidence。若 evidence 帶 failed / passed 計數,cli.js 會驗 failed===0 且 passed>=1(todo-only 不算通過)。kind:'unit' 的 pass 另必含 { command, exit_code:0, passed, failed };kind:'e2e' 的形狀較自由(端到端行為描述 / 快照路徑 / 驗的是真依賴還是 mock 退路等),引擎只要求非空。",

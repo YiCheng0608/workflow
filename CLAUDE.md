@@ -22,10 +22,11 @@
 
 ## 常用指令
 
-- 引擎回歸測試(無框架,全綠 `exit 0`):
+- 引擎與工具回歸測試(無框架,全綠 `exit 0`):
   - `node .claude/skills/orchestrator/scripts/cli.test.js`
   - `node .claude/skills/orchestrator/scripts/decide.test.js`
-- 改過 `cli.js` / `decide.js`:先 `node --check` 過語法,再跑上面兩支 test。(skills 樹是單一實體、`.agents/skills` 為 symlink,改完即兩 runtime 生效,無需另行同步。)
+  - `node .claude/skills/orchestrator/scripts/gate-view.test.js`
+- 改過 `scripts/` 下的程式:先 `node --check` 過語法,再跑上面的 test。(skills 樹是單一實體、`.agents/skills` 為 symlink,改完即兩 runtime 生效,無需另行同步。)
 
 ## 改 / 新增 skill 的鐵則
 
