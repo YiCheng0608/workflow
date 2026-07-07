@@ -290,22 +290,24 @@ function gitToplevel() {
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
   } catch { return null; }
 }
-// 髒檔清單:{ xy, rel },rel 一律相對 cwd(與 outputs 的路徑約定一致)。
+// 髒檔清單:{ xy, rel },rel 一律相對 cwd(與 outputs 的路徑約定一致),分隔符一律
+// POSIX「/」(Windows 的 path.relative 產反斜線,會對不上 orchestrator/ 前綴與 glob 比對)。
 // -z + --no-renames:NUL 分隔、不做 rename 偵測,路徑不被引號轉義,機械可解析;
 // -uall:未追蹤目錄展開成逐檔,才對得上逐檔申報的 outputs。
+const toPosix = p => p.split(path.sep).join('/');
 function dirtyEntries(toplevel, cwd) {
   const raw = execFileSync('git', ['status', '--porcelain=v1', '-z', '-uall', '--no-renames'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   return raw.split('\0').filter(Boolean).map(rec => ({
     xy: rec.slice(0, 2),
-    rel: path.relative(cwd, path.join(toplevel, rec.slice(3))),
+    rel: toPosix(path.relative(cwd, path.join(toplevel, rec.slice(3)))),
   }));
 }
 function undeclaredChanges(m, specId, result) {
   const toplevel = gitToplevel();
   if (!toplevel) return [];
   const cwd = fs.realpathSync(process.cwd());
-  const norm = p => path.relative(cwd, path.resolve(cwd, p));
+  const norm = p => toPosix(path.relative(cwd, path.resolve(cwd, p)));
   const declared = new Set([...(result.outputs || []), ...(result.deleted || [])].map(norm));
   // 同一 run 先前站已記回的 outputs 通常還沒 commit,一樣出現在 git status——不算本站未申報。
   for (const s of Object.values(m.specs)) for (const o of (s.outputs || [])) declared.add(norm(o));
