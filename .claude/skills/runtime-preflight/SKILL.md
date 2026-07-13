@@ -7,7 +7,7 @@ description: 在隔離 worktree 內跑機器測試前準備 runtime 依賴環境
 
 ## 用途
 
-在測試 worker 跑真測試前,先把目標 worktree 的 runtime 依賴環境準備到可執行狀態。它解決的是「隔離 worktree 需要測試,但不希望每個 worktree 都完整重複下載 / 展開依賴」。
+在測試 worker 跑真測試前,把目標 worktree 的 runtime 依賴環境準備到可執行狀態。目標是在保留 per-worktree 投影的同時,避免每個 worktree 都重複下載 / 展開依賴。
 
 核心規則:
 
@@ -31,7 +31,8 @@ description: 在隔離 worktree 內跑機器測試前準備 runtime 依賴環境
 ## 工作流程
 
 1. **定位 worktree 根目錄**:在 orchestrator / task-flow 傳入的目標 repo 或 worktree 內執行;不要在主 checkout 偷跑。
-2. **偵測 runtime**:用 lockfile / manifest 判斷需要哪些 adapter。常見訊號:
+2. **先跑 deterministic runner**:`node "$SKILL_DIR/scripts/preflight.js" --root <worktree>`。成功 JSON 直接併入 test evidence；`cache_hit:true` 時不得再自行 install。失敗才依回傳 evidence 判斷 environment failure。
+3. runner 會用 lockfile / manifest 判斷需要哪些 adapter。常見訊號:
    - Node:`pnpm-lock.yaml`、`package-lock.json`、`yarn.lock`、`package.json`
    - Python:`uv.lock`、`poetry.lock`、`requirements*.txt`、`pyproject.toml`
    - PHP:`composer.lock`、`composer.json`
@@ -39,10 +40,8 @@ description: 在隔離 worktree 內跑機器測試前準備 runtime 依賴環境
    - Rust:`Cargo.lock`、`Cargo.toml`
    - Ruby:`Gemfile.lock`、`Gemfile`
    - Docker:`Dockerfile`、`compose.yaml`、`docker-compose.yml`
-3. **計算投影 fingerprint**:至少包含 lockfile / manifest hash、runtime 版本、package manager 名稱與版本、OS / arch、native ABI 相關版本與重要 install flags / env。不能只看 lockfile。
-4. **檢查 worktree 內投影**:若缺投影、fingerprint 不符、或偵測到上次 install 未完成,就重建或修復投影。
-5. **使用共享 cache / store install**:install 可共享 manager-owned cache / store,但輸出投影留在 worktree 內。
-6. **回報 preflight evidence**:把實際做了什麼、fingerprint、共享 cache / store 路徑、是否重建投影、風險或降級寫進 test worker 的 evidence / env_patch。本站不直接寫 manifest。
+4. runner 計算 fingerprint、檢查投影與完成標記；只有 cache miss 才 install。install 使用 manager-owned cache / store，輸出投影留在 worktree。
+5. runner 以 `orchestrator/runtime-preflight/.lock/owner.json` 記錄 PID、hostname 與時間，防止同一 worktree 併發 install；同 host 的 dead PID lock 自動回收，活躍 PID 預設等待最多 60 秒並每 200ms 重試。取得 lock 後重新檢查 fingerprint，通常直接 cache hit；只有等待逾時才算 environment failure。可用 `--lock-timeout-ms` / `--lock-poll-ms` 調整。
 
 ## Fingerprint
 
