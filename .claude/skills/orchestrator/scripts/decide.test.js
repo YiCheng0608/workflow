@@ -347,4 +347,65 @@ test('case23 decideAll[0] ≡ decide(鎖排序耦合)', () => {
   }
 });
 
+test('case24 next-all limit 截斷批次但保留 total_ready', () => {
+  const m = fixture();
+  m.specs['spec-a'] = { id: 'spec-a', skill: 'w', status: 'pending', depends_on: [], outputs: [], last_failure: null, fix_target: null };
+  m.specs['spec-b'] = { id: 'spec-b', skill: 'w', status: 'pending', depends_on: [], outputs: [], last_failure: null, fix_target: null };
+  const batch = decideAll(m, ctx(), { limit: 1 });
+  assert.equal(batch.actions.length, 1);
+  assert.ok(batch.total_ready >= 3);
+});
+
+test('case25 同 spec tests 只有 parallel_safe 且 resource 不衝突才平行', () => {
+  const m = fixture();
+  m.tests['test-unit'].status = 'pending';
+  m.tests['test-e2e'].depends_on = [];
+  m.tests['test-unit'].parallel_safe = true;
+  m.tests['test-unit'].resource_keys = ['cpu'];
+  m.tests['test-e2e'].parallel_safe = true;
+  m.tests['test-e2e'].resource_keys = ['browser'];
+  let batch = decideAll(m, ctx());
+  assert.equal(batch.actions.filter(a => a.type === 'test').length, 2);
+  m.tests['test-e2e'].resource_keys = ['cpu'];
+  batch = decideAll(m, ctx());
+  assert.equal(batch.actions.filter(a => a.type === 'test').length, 1, 'resource 衝突應序列化');
+});
+
+test('case26 produce 成功持久化 deleted，重做會覆寫舊值', () => {
+  const m = fixture();
+  applyProduce(m, 'spec-4', { ok: true, outputs: ['src/Foo.jsx'], deleted: ['src/app.js'] });
+  assert.deepEqual(m.specs['spec-4'].deleted, ['src/app.js']);
+  m.specs['spec-4'].status = 'failed';
+  applyProduce(m, 'spec-4', { ok: true, outputs: ['src/Foo.jsx'] });
+  assert.deepEqual(m.specs['spec-4'].deleted, []);
+});
+
+test('case27 review_gate 重做合併 changed outputs 與 retained outputs', () => {
+  const m = fixture();
+  m.specs['spec-1'].review_gate = true;
+  m.specs['spec-1'].status = 'pending';
+  m.specs['spec-1'].outputs = ['orchestrator/intake-verification.md'];
+  applyProduce(m, 'spec-1', {
+    ok: true,
+    outputs: ['orchestrator/intake-tasks.md'],
+    retained_outputs: ['orchestrator/intake-verification.md'],
+  });
+  assert.deepEqual(m.specs['spec-1'].outputs, [
+    'orchestrator/intake-tasks.md',
+    'orchestrator/intake-verification.md',
+  ]);
+});
+
+test('case28 非 review_gate spec 忽略 retained_outputs,不合併進 outputs', () => {
+  const m = fixture();
+  m.specs['spec-1'].status = 'pending';
+  m.specs['spec-1'].outputs = ['orchestrator/intake-verification.md'];
+  applyProduce(m, 'spec-1', {
+    ok: true,
+    outputs: ['orchestrator/intake-tasks.md'],
+    retained_outputs: ['orchestrator/intake-verification.md'],
+  });
+  assert.deepEqual(m.specs['spec-1'].outputs, ['orchestrator/intake-tasks.md']);
+});
+
 console.log(`\n${pass} passed`);

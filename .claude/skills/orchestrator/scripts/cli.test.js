@@ -179,6 +179,97 @@ test('produce 驗證:outputs 不是 string 陣列 → exit 1', () => {
   assert.ok(r.err.includes('outputs'));
 });
 
+test('produce 驗證:retained_outputs 只允許 review_gate 沿用上一版且不得與 outputs 重疊', () => {
+  const m = fixture();
+  m.specs['spec-4'].outputs = ['orchestrator/triage.md'];
+  let mp = writeJson('m.json', m);
+  let r = run('produce', mp, 'spec-4', writeJson('r.json', {
+    ok: true, retained_outputs: ['orchestrator/triage.md'], review: REVIEW,
+  }));
+  assert.equal(r.code, 1);
+  assert.ok(r.err.includes('outputs 必須是 string 陣列'));
+
+  mp = writeJson('m.json', m);
+  r = run('produce', mp, 'spec-4', writeJson('r.json', {
+    ok: true, outputs: ['src/Foo.jsx'], retained_outputs: ['orchestrator/triage.md'], review: REVIEW,
+  }));
+  assert.equal(r.code, 1);
+  assert.ok(r.err.includes('review_gate'));
+
+  m.specs['spec-4'].review_gate = true;
+  mp = writeJson('m.json', m);
+  r = run('produce', mp, 'spec-4', writeJson('r.json', {
+    ok: true, outputs: ['src/Foo.jsx'], retained_outputs: ['orchestrator/missing.md'], review: REVIEW,
+  }));
+  assert.equal(r.code, 1);
+  assert.ok(r.err.includes('上一版 outputs'));
+
+  mp = writeJson('m.json', m);
+  r = run('produce', mp, 'spec-4', writeJson('r.json', {
+    ok: true, outputs: ['orchestrator/triage.md'], retained_outputs: ['orchestrator/triage.md'], review: REVIEW,
+  }));
+  assert.equal(r.code, 1);
+  assert.ok(r.err.includes('不得重疊'));
+
+  m.specs['spec-4'].outputs = ['orchestrator/triage.md', 'src/layout/Sidebar.tsx'];
+  mp = writeJson('m.json', m);
+  r = run('produce', mp, 'spec-4', writeJson('r.json', {
+    ok: true, outputs: ['src/Foo.jsx'], retained_outputs: ['orchestrator/triage.md'], review: REVIEW,
+  }));
+  assert.equal(r.code, 1);
+  assert.ok(r.err.includes('完整處置上一版 outputs'));
+});
+
+test('produce 成功:review_gate 重做合併 changed outputs 與 retained outputs', () => {
+  const m = fixture();
+  m.specs['spec-4'].review_gate = true;
+  m.specs['spec-4'].outputs = ['orchestrator/triage.md'];
+  const mp = writeJson('m.json', m);
+  const r = run('produce', mp, 'spec-4', writeJson('r.json', {
+    ok: true, outputs: ['src/Foo.jsx'], retained_outputs: ['orchestrator/triage.md'], review: REVIEW,
+  }));
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(readJson(mp).specs['spec-4'].outputs, ['src/Foo.jsx', 'orchestrator/triage.md']);
+});
+
+test('produce:review_gate 記回落盤 output_hashes;retained 未改通過、被改擋下', () => {
+  touch('orchestrator/probe.md');
+  const m = fixture();
+  m.specs['spec-4'].review_gate = true;
+  const mp = writeJson('m.json', m);
+  let r = run('produce', mp, 'spec-4', writeJson('r.json', {
+    ok: true, outputs: ['orchestrator/probe.md'], review: REVIEW,
+  }));
+  assert.equal(r.code, 0, r.err);
+  const hashes = readJson(mp).specs['spec-4'].output_hashes;
+  assert.ok(hashes && typeof hashes['orchestrator/probe.md'] === 'string', '記回成功應落盤內容雜湊基準');
+
+  // lease 記回即消耗:每次重做前補回授權(等同重跑 next 發派)
+  const release = () => {
+    const cur = readJson(mp);
+    cur.orchestration.leases = ['produce:spec-4'];
+    fs.writeFileSync(mp, JSON.stringify(cur, null, 2));
+  };
+
+  // 內容未變 → retained 沿用通過
+  release();
+  r = run('produce', mp, 'spec-4', writeJson('r.json', {
+    ok: true, outputs: [], retained_outputs: ['orchestrator/probe.md'], review: REVIEW,
+  }));
+  assert.equal(r.code, 0, r.err);
+
+  // 內容被改卻宣稱 retained → 以基準雜湊擋下,manifest 不動
+  release();
+  fs.writeFileSync(path.join(tmp, 'orchestrator/probe.md'), '// tampered\n');
+  const before = readJson(mp);
+  r = run('produce', mp, 'spec-4', writeJson('r.json', {
+    ok: true, outputs: [], retained_outputs: ['orchestrator/probe.md'], review: REVIEW,
+  }));
+  assert.equal(r.code, 1);
+  assert.ok(r.err.includes('內容與上次記回時不同'));
+  assert.deepEqual(readJson(mp), before, '被擋下時 manifest 不得變動');
+});
+
 // ── test:記回、訊號與 env_patch ─────────────────────────────────
 
 test('test 通過:turn+1、failSignals 清空', () => {
@@ -524,16 +615,64 @@ test('lease:未經發派的 produce → exit 1、manifest 不動;next 發派後�
   assert.equal(r.code, 0, r.err);
 });
 
+test('lease:序列 next 只授權實際回傳的單一 action', () => {
+  const m = fixture();
+  m.tests = {};
+  m.specs['spec-a'] = { id: 'spec-a', skill: 'w', status: 'pending', depends_on: [], outputs: [], last_failure: null, fix_target: null };
+  m.orchestration.leases = [];
+  const mp = writeJson('m.json', m);
+  const r = run('next', mp);
+  assert.equal(r.code, 0, r.err);
+  const leases = readJson(mp).orchestration.leases;
+  assert.deepEqual(leases, [`produce:${r.out.spec}`]);
+  assert.equal(readJson(mp).orchestration.metrics.dispatched, 1);
+});
+
 test('lease:記回即消耗,同一 produce 不能記兩次;下一輪授權由記回後的狀態重算', () => {
-  const mp = writeJson('m.json', fixture());
+  const m = fixture();
+  m.orchestration.leases = ['produce:spec-4'];
+  const mp = writeJson('m.json', m);
   const rp = writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: REVIEW });
   let r = run('produce', mp, 'spec-4', rp);
   assert.equal(r.code, 0, r.err);
   const after = readJson(mp);
   assert.ok(!after.orchestration.leases.includes('produce:spec-4'), '成功記回應消耗授權');
   assert.ok(after.orchestration.leases.includes('test:test-unit'), '記回後應重算出下一輪授權');
+  assert.equal(r.out.next.test, 'test-unit', '內嵌 next 與新增 lease 必須是同一 action');
   r = run('produce', mp, 'spec-4', rp);
   assert.equal(r.code, 1, '沒有新發派不得重記');
+});
+
+test('metrics:發派與記回累計 action、等待時間及選填 token usage', () => {
+  const m = fixture();
+  m.orchestration.leases = [];
+  const mp = writeJson('m.json', m);
+  let r = run('next', mp);
+  assert.equal(r.code, 0, r.err);
+  r = run('produce', mp, 'spec-4', writeJson('r.json', {
+    ok: true, outputs: ['src/Foo.jsx'], review: REVIEW,
+    usage: { input_tokens: 120, output_tokens: 30 },
+  }));
+  assert.equal(r.code, 0, r.err);
+  r = run('metrics', mp);
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out.dispatched, 2, 'produce 完成後新 ready 的 test 也應計入發派');
+  assert.equal(r.out.completed, 1);
+  assert.equal(r.out.input_tokens, 120);
+  assert.equal(r.out.output_tokens, 30);
+  assert.equal(r.out.total_tokens, 150);
+  assert.ok(r.out.actions.find(a => a.action === 'produce:spec-4').total_wait_ms >= 0);
+});
+
+test('metrics:usage token 必須是非負整數', () => {
+  const mp = writeJson('m.json', fixture());
+  const r = run('produce', mp, 'spec-4', writeJson('r.json', {
+    ok: true, outputs: ['src/Foo.jsx'], review: REVIEW,
+    usage: { input_tokens: -1, output_tokens: 1.5 },
+  }));
+  assert.equal(r.code, 1);
+  assert.ok(r.err.includes('usage.input_tokens'));
+  assert.ok(r.err.includes('usage.output_tokens'));
 });
 
 test('lease:produce 失敗 → 重做授權立即重發(不必先繞一趟 next)', () => {
@@ -583,6 +722,52 @@ test('lease:平行批次裡某項觸發停點,其他 in-flight 結果仍可記�
   r = run('test', mp, 'test-b', writeJson('r.json', { pass: true, evidence: EV_PASS }));
   assert.equal(r.code, 0, '停點不作廢其他 in-flight 授權:' + (r.err || ''));
   assert.equal(readJson(mp).specs['spec-b'].status, 'verified');
+});
+
+test('lease:平行批次序列記回時不重複內嵌仍在 in-flight 的 action', () => {
+  const m = {
+    specs: {
+      'spec-a': { id: 'spec-a', skill: 'w', status: 'produced', depends_on: [], outputs: [], last_failure: null, fix_target: null },
+      'spec-b': { id: 'spec-b', skill: 'w', status: 'produced', depends_on: [], outputs: [], last_failure: null, fix_target: null },
+    },
+    tests: {
+      'test-a': { id: 'test-a', verifies: 'spec-a', runner: 'unit', kind: 'unit', status: 'pending', last_fail: null },
+      'test-b': { id: 'test-b', verifies: 'spec-b', runner: 'unit', kind: 'unit', status: 'pending', last_fail: null },
+    },
+    env: {}, orchestration: { turn: 0, maxTurns: 30, noProgressK: 3, failSignals: [], leases: [] },
+  };
+  const mp = writeJson('m.json', m);
+  let r = run('next-all', mp);
+  assert.equal(r.code, 0, r.err);
+  r = run('test', mp, 'test-a', writeJson('r.json', { pass: true, evidence: EV_PASS }));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out.next.type, 'batch-in-flight');
+  assert.equal(r.out.continue, false);
+  assert.deepEqual(readJson(mp).orchestration.leases, ['test:test-b']);
+});
+
+test('next-all --limit:只發派截斷後 actions 的 lease', () => {
+  const m = fixture();
+  m.specs['spec-a'] = { id: 'spec-a', skill: 'w', status: 'pending', depends_on: [], outputs: [], last_failure: null, fix_target: null };
+  m.orchestration.leases = [];
+  const mp = writeJson('m.json', m);
+  const r = run('next-all', mp, '--limit', '1');
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out.actions.length, 1);
+  assert.equal(readJson(mp).orchestration.leases.length, 1);
+});
+
+test('next-all --limit:記回後補發 lease 仍不得超過 slot 上限', () => {
+  const m = fixture();
+  m.specs['spec-a'] = { id: 'spec-a', skill: 'w', status: 'pending', depends_on: [], outputs: [], last_failure: null, fix_target: null };
+  m.orchestration.leases = [];
+  const mp = writeJson('m.json', m);
+  let r = run('next-all', mp, '--limit', '1');
+  assert.equal(r.code, 0, r.err);
+  assert.equal(r.out.actions[0].spec, 'spec-4');
+  r = run('produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], review: REVIEW }));
+  assert.equal(r.code, 0, r.err);
+  assert.equal(readJson(mp).orchestration.leases.length, 1, '補發後仍只能有一個 active lease');
 });
 
 // ── review 欄位硬驗:審查深度合規 + reviewer 結論落盤 ───────────────────────
@@ -679,6 +864,32 @@ test('validate:健康 manifest → ok:true', () => {
   const r = run('validate', mp);
   assert.equal(r.code, 0, r.err);
   assert.equal(r.out.ok, true);
+});
+
+test('validate:test parallel_safe / resource_keys 合法形狀 → ok:true', () => {
+  const m = fixture();
+  m.tests['test-unit'].parallel_safe = true;
+  m.tests['test-unit'].resource_keys = ['cpu', 'browser:chromium'];
+  const r = run('validate', writeJson('m.json', m));
+  assert.equal(r.code, 0, r.err);
+});
+
+test('validate:test parallel_safe 必須是 boolean', () => {
+  const m = fixture();
+  m.tests['test-unit'].parallel_safe = 'true';
+  const r = run('validate', writeJson('m.json', m));
+  assert.equal(r.code, 1);
+  assert.ok(JSON.parse(r.stdout).errors.some(e => e.includes('parallel_safe')));
+});
+
+test('validate:test resource_keys 必須是非空 string 陣列', () => {
+  for (const value of ['cpu', [''], ['cpu', 3]]) {
+    const m = fixture();
+    m.tests['test-unit'].resource_keys = value;
+    const r = run('validate', writeJson('m.json', m));
+    assert.equal(r.code, 1, `resource_keys=${JSON.stringify(value)} 應被拒絕`);
+    assert.ok(JSON.parse(r.stdout).errors.some(e => e.includes('resource_keys')));
+  }
 });
 
 test('validate:懸空 depends_on / verifies → ok:false、exit 1', () => {
@@ -804,6 +1015,22 @@ test('deleted 申報:刪檔未申報 → exit 1;申報 deleted → 照常記回'
   r = runIn(repo, 'produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], deleted: ['src/app.js'], review: REVIEW }));
   assert.equal(r.code, 0, r.err);
   assert.equal(r.out.status, 'produced');
+  assert.deepEqual(readJson(mp).specs['spec-4'].deleted, ['src/app.js']);
+});
+
+test('deleted 申報:前站合法刪檔不阻塞後站記回', () => {
+  const repo = makeGitRepo();
+  fs.rmSync(path.join(repo, 'src/app.js'));
+  writeIn(repo, 'src/Foo.jsx');
+  const m = fixture();
+  m.tests = {};
+  m.specs['spec-5'] = { id: 'spec-5', skill: 'w', status: 'pending', depends_on: ['spec-2'], outputs: [], last_failure: null, fix_target: null, allowed_outputs: ['src/layout/Header.tsx'] };
+  const mp = writeJson('m.json', m);
+  let r = runIn(repo, 'produce', mp, 'spec-4', writeJson('r.json', { ok: true, outputs: ['src/Foo.jsx'], deleted: ['src/app.js'], review: REVIEW }));
+  assert.equal(r.code, 0, r.err);
+  writeIn(repo, 'src/layout/Header.tsx');
+  r = runIn(repo, 'produce', mp, 'spec-5', writeJson('r.json', { ok: true, outputs: ['src/layout/Header.tsx'], review: REVIEW }));
+  assert.equal(r.code, 0, r.err);
 });
 
 test('deleted 申報:宣告刪了但檔還在 / 刪到 ownership 外 → exit 1', () => {

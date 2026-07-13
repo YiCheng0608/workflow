@@ -99,7 +99,7 @@ function decide(m, ctx) {
 // 分組順序與 decide() 的優先序一致(failed 重做 → test → produce),且兩者都用同一個
 // Object.values 走訪序,因此在目前排序規則下 decideAll 的第一個動作與 decide() 相容——
 // 這是「同步退化相容」,不是對未來改排序策略的承諾。
-function decideAll(m, ctx) {
+function decideAll(m, ctx, options = {}) {
   const stop = terminationGuard(m, ctx);
   if (stop) return { ...stop, actions: [] };
 
@@ -117,16 +117,26 @@ function decideAll(m, ctx) {
     if (s.status === 'failed' && depsVerified(m, s))
       actions.push({ type: 'produce', spec: s.id, reason: `${s.id} 被回頭,重新產出` });
 
-  // 2. 每個 produced / verified spec 取「一個」待跑 test → 驗證(納入 verified 的理由見 decide() 第 2 步)。
+  // 2. 每個 produced / verified spec 預設只取一個 test。只有 test 明示 parallel_safe:true，
+  //    且 resource_keys 與本批已選 test 不衝突時，才允許同 spec 多 test 平行。
   //    produced spec 的 test 必 pending/pass(fail 會同時把 spec 轉 failed → 落上面重做分支);
   //    verified spec 一般 test 全 pass、find 回 undefined 自動略過,只有補了新 pending test 才取到。
   //    刻意每 spec 每輪只取一個:同一 spec 的多個 test 常共用同一套 runner / 工作區,
   //    平行跑會互踩(搶寫同檔、同 port…);不同 spec 的 test 仍各自平行。剩下的
   //    test 下一輪再取(且若這個先 fail,fail-fast 還省下其餘平行跑)。
+  const usedResources = new Set();
   for (const s of specs)
     if (s.status === 'produced' || s.status === 'verified') {
-      const t = testsOf(m, s.id).find(x => x.status !== 'pass' && testDepsMet(m, x));
-      if (t) actions.push({ type: 'test', test: t.id, spec: s.id });
+      const ready = testsOf(m, s.id).filter(x => x.status !== 'pass' && testDepsMet(m, x));
+      for (const t of ready) {
+        const keys = Array.isArray(t.resource_keys) ? t.resource_keys : [];
+        const conflict = keys.some(key => usedResources.has(key));
+        const alreadySelected = actions.some(a => a.type === 'test' && a.spec === s.id);
+        if (conflict || (alreadySelected && t.parallel_safe !== true)) continue;
+        actions.push({ type: 'test', test: t.id, spec: s.id, ...(keys.length ? { resource_keys: keys } : {}) });
+        keys.forEach(key => usedResources.add(key));
+        if (t.parallel_safe !== true) break;
+      }
     }
 
   // 3. 所有依賴已齊的 pending spec → 產出
@@ -134,16 +144,14 @@ function decideAll(m, ctx) {
     if (s.status === 'pending' && depsVerified(m, s))
       actions.push({ type: 'produce', spec: s.id, reason: '依賴齊備,產出' });
 
-  if (actions.length) return { type: 'batch', actions };
+  if (actions.length) {
+    const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : actions.length;
+    return { type: 'batch', actions: actions.slice(0, limit), total_ready: actions.length };
+  }
 
   // 沒有 runnable:全 verified → done,否則卡死
   if (specs.length && specs.every(s => s.status === 'verified')) return { type: 'done', actions: [] };
   return { type: 'halt', reason: '無可執行動作,可能依賴無法滿足', actions: [] };
-}
-
-// ── test 掛了 → 機械式查出是哪個 spec(靠 manifest 對照,不用猜)──
-function specForFailedTest(m, testId) {
-  return m.tests[testId].verifies;
 }
 
 // ── 共用小工具:從 result 解出「性質軸 altitude」與「定位軸 target spec-id」──
@@ -298,7 +306,13 @@ function applyProduce(m, specId, result) {
   testsOf(m, specId).forEach(t => { t.status = 'pending'; t.last_fail = null; });
   s.last_failure = null;
   s.fix_target = null;
-  if (Array.isArray(result.outputs)) s.outputs = result.outputs;
+  if (Array.isArray(result.outputs)) {
+    // retained_outputs 只有 review_gate spec(重 intake 沿用上版文件)有效;一般 spec 一律忽略。
+    s.outputs = s.review_gate
+      ? [...new Set([...result.outputs, ...(result.retained_outputs || [])])]
+      : result.outputs;
+  }
+  s.deleted = Array.isArray(result.deleted) ? result.deleted : [];
   if (s.review_gate) {
     // review gate:flow 在 spec 上宣告 review_gate:true → 產出成功也不前進,改標 blocked
     // (kind:'review'),decide 會轉 clarify 全域停下,讓使用者查看產出文件、討論後才續跑。
@@ -362,4 +376,4 @@ function applyResumeEnv(m, answer) {
   m.block = null;
 }
 
-module.exports = { decide, decideAll, applyProduce, applyTestResult, applyResume, applyResumeEnv, altitudeOf, blameTargetId, specForFailedTest, cascadeInvalidate, testsOf, forbiddenOutputs, disallowedOutputs };
+module.exports = { decide, decideAll, applyProduce, applyTestResult, applyResume, applyResumeEnv, altitudeOf, blameTargetId, cascadeInvalidate, testsOf, forbiddenOutputs, disallowedOutputs };

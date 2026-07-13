@@ -1,8 +1,8 @@
 {
-  "task": "範例(通用任務引擎):把一份使用者需求經 intake 拆成任務清單 + 驗證地圖 + review map(過人類 gate),再由 worker 逐一產出、依 review map 做 full / focused / deferred 審查;能機器驗的節點實跑 test,無客觀裁判的節點誠實標記為『無裁判』。",
+  "task": "範例(通用任務引擎):把一份使用者需求經 intake 拆成任務清單 + 驗證地圖 + review map(經 human gate),再由 worker 逐一產出、依 review map 做 full / focused / deferred 審查;能機器驗的節點實跑 test,無客觀裁判的節點誠實標記為『無裁判』。",
   "_note": "通用結構範本。引擎(cli.js / decide.js)只讀通用狀態欄位;_ 開頭欄位僅為註解。",
   "_note_requirement": "真實 bootstrap 需另寫 orchestrator/requirement.md 保存使用者原文;manifest 不存需求全文。",
-  "_note_intake": "spec-1 是 intake,帶 review_gate:true。其 outputs 是 analysis / tasks / verification / review-map 四份文件,人類 gate 同意後才放行下游。",
+  "_note_intake": "spec-1 是 intake,帶 review_gate:true。其 outputs 是 analysis / tasks / verification / review-map 四份文件,human gate 同意後才放行下游。",
   "_note_reviewer": "reviewer 不是 manifest 節點。下游 worker produce 後、cli.js produce 前,orchestrator 依 planning.review_map 做 full / focused reviewer 或合法 defer。",
   "_note_planning": "verification_map 與 review_map 給 human gate / orchestrator 使用;decide.js 不讀。review_map 只列下游 worker spec,intake 自身由 orchestrator 固定 full reviewer。",
   "planning": {
@@ -10,7 +10,7 @@
       { "task": "spec-2", "verdict": "machine", "how": "unit test 實跑,exit_code + passed/failed", "reason": "純邏輯,可機器驗" },
       { "task": "spec-3", "verdict": "machine", "how": "unit test 實跑,exit_code + passed/failed", "reason": "純邏輯,可機器驗" },
       { "task": "spec-4", "verdict": "machine", "how": "整合 / 端到端 test 實跑", "reason": "跨節點行為,實跑端到端驗" },
-      { "task": "spec-5", "verdict": "no-judge", "how": "僅 reviewer 對著需求原文主觀審", "reason": "說明文件,無客觀裁判——人類 gate 須明確接受此節點沒有機器裁判" }
+      { "task": "spec-5", "verdict": "no-judge", "how": "僅 reviewer 對著需求原文主觀審", "reason": "說明文件,無客觀裁判——human gate 須明確接受此節點沒有機器裁判" }
     ],
     "review_map": [
       { "task": "spec-2", "risk": "low", "review_depth": "defer-until-signal", "split_reason": "獨立輸出 ownership 且 unit test 可驗", "upgrade_triggers": ["outputs 越界", "last_failure 非空", "test fail 後重做"], "reason": "低風險且有可靠 machine test" },
@@ -22,7 +22,7 @@
   "_note_requires_test": "requires_test:true 的 spec 必須有 test verifies 它;machine 任務一律填,no-judge 不填。",
   "_note_output_guards": "allowed_outputs / forbid_outputs 用 glob 約束 worker 產出 ownership;命中違規時 applyProduce 會改判 code 失敗。produce 成功記回時 cli.js 另拿 git status(扣掉 orchestrator/)反向比對:未被 outputs / deleted 申報的磁碟修改直接拒收(非 git 目錄跳過);deleted 宣告的檔必須真的已不在磁碟且不越出本站 ownership。",
   "_note_review_gate": "review_gate:true 會在 produce 成功後停下等使用者 approve。本範本只給 intake 使用。",
-  "_note_protocol": "orchestration.leases 由 cli.js next / next-all 發派時自動寫入;produce / test 只接受發派過的 action。produce 成功記回必帶 review 欄位:深度不得低於 review_map 要求(未列預設 full;last_failure 非空一律 full),full / focused 必附落盤的 reviewer 結論檔(record),引擎記回後存進 spec.last_review。",
+  "_note_protocol": "orchestration.leases 由 cli.js next / next-all 發派時自動寫入;produce / test 只接受發派過的 action。produce 成功記回必帶 review 欄位:深度不得低於 review_map 要求(未列預設 full;last_failure 非空一律 full),full / focused 必附已寫入磁碟的 reviewer 結論檔(record),引擎記回後存進 spec.last_review。orchestration.metrics 由 cli.js 自動維護;host 可在 result.json 選填 usage.input_tokens / output_tokens。",
   "_note_test_evidence": "test 結果的 evidence(pass:true 時必填、非空 object):實跑證據。若測試前需要 runtime 依賴,先依 runtime-preflight 準備 worktree 內可變投影並只共享安全 cache / store,再把 preflight 狀態併入 evidence。若 evidence 帶 failed / passed 計數,cli.js 會驗 failed===0 且 passed>=1(todo-only 不算通過)。kind:'unit' 的 pass 另必含 { command, exit_code:0, passed, failed };kind:'e2e' 的形狀較自由(端到端行為描述 / 快照路徑 / 驗的是真依賴還是 mock 退路等),引擎只要求非空。",
   "_note_env": "env(選填):本次任務的執行期事實 / 設定,由 intake 依需求填(任務需要什麼就寫什麼,沒提到的不臆造)。通用引擎不預設任何欄位。env_patchable 列出 worker 經 test 結果的 env_patch 可回寫的欄位白名單(只有執行期偵測到的事實可回寫,身份 / 前提欄位不可被 patch)。",
   "specs": {

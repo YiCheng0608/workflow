@@ -11,10 +11,11 @@
 // 協議強制:next / next-all 發派 action 時把授權寫進 orchestration.leases;
 // produce / test 只接受發派過的 action(先問、再派、再記回,繞過 next 私跑會被 exit 1 擋下)。
 'use strict';
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { decide, decideAll, applyProduce, applyTestResult, applyResume, applyResumeEnv, altitudeOf, blameTargetId, specForFailedTest, forbiddenOutputs, disallowedOutputs } = require('./decide');
+const { decide, decideAll, applyProduce, applyTestResult, applyResume, applyResumeEnv, altitudeOf, blameTargetId, forbiddenOutputs, disallowedOutputs } = require('./decide');
 
 function load(p) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); }
@@ -23,6 +24,7 @@ function load(p) {
 function save(p, m) { fs.writeFileSync(p, JSON.stringify(m, null, 2) + '\n'); }
 function fail(msg) { process.stderr.write('✗ ' + msg + '\n'); process.exit(1); }
 function out(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+function fileHash(p) { return crypto.createHash('sha256').update(fs.readFileSync(path.resolve(p))).digest('hex'); }
 
 // 迴圈計數也存在 manifest 裡(orchestration 區塊),保持單一事實來源
 function ctxOf(m) {
@@ -36,10 +38,54 @@ function ctxOf(m) {
 }
 function writeCtx(m, ctx) {
   m.orchestration = {
+    ...(m.orchestration || {}),
     turn: ctx.turn, maxTurns: ctx.maxTurns,
     noProgressK: ctx.noProgressK, failSignals: ctx.failSignals,
     leases: (m.orchestration || {}).leases || [],
   };
+}
+
+function nowIso() { return new Date().toISOString(); }
+function metricsOf(m) {
+  m.orchestration = m.orchestration || {};
+  m.orchestration.metrics = m.orchestration.metrics || { actions: {} };
+  m.orchestration.metrics.actions = m.orchestration.metrics.actions || {};
+  return m.orchestration.metrics;
+}
+function markDispatched(m, key) {
+  const metrics = metricsOf(m);
+  const action = metrics.actions[key] || {};
+  const at = nowIso();
+  metrics.actions[key] = {
+    ...action,
+    dispatch_count: (action.dispatch_count || 0) + 1,
+    first_dispatched_at: action.first_dispatched_at || at,
+    last_dispatched_at: at,
+  };
+  metrics.dispatched = (metrics.dispatched || 0) + 1;
+}
+function markCompleted(m, key, outcome, usage) {
+  const metrics = metricsOf(m);
+  const action = metrics.actions[key] || {};
+  const completedAt = nowIso();
+  const dispatchedAt = action.last_dispatched_at && Date.parse(action.last_dispatched_at);
+  const waitMs = Number.isFinite(dispatchedAt) ? Math.max(0, Date.parse(completedAt) - dispatchedAt) : null;
+  const inputTokens = usage && usage.input_tokens || 0;
+  const outputTokens = usage && usage.output_tokens || 0;
+  metrics.actions[key] = {
+    ...action,
+    completion_count: (action.completion_count || 0) + 1,
+    last_completed_at: completedAt,
+    last_outcome: outcome,
+    total_wait_ms: (action.total_wait_ms || 0) + (waitMs || 0),
+    input_tokens: (action.input_tokens || 0) + inputTokens,
+    output_tokens: (action.output_tokens || 0) + outputTokens,
+    total_tokens: (action.total_tokens || 0) + inputTokens + outputTokens,
+  };
+  metrics.completed = (metrics.completed || 0) + 1;
+  metrics.input_tokens = (metrics.input_tokens || 0) + inputTokens;
+  metrics.output_tokens = (metrics.output_tokens || 0) + outputTokens;
+  metrics.total_tokens = (metrics.total_tokens || 0) + inputTokens + outputTokens;
 }
 
 // 進度只清「該 target」的震盪訊號,不是整個窗口。訊號一律 target-first(`${target}:${…}`),
@@ -62,24 +108,33 @@ function clearSignalsFor(signals, ...targets) {
 function leaseKey(a) {
   return a.type === 'produce' ? `produce:${a.spec}` : a.type === 'test' ? `test:${a.test}` : null;
 }
-function currentLeaseKeys(m) {
-  const keys = [];
-  for (const a of (decideAll(m, ctxOf(m)).actions || [])) {
-    const k = leaseKey(a);
-    if (k) keys.push(k);
-  }
-  return keys;
-}
-function refreshLeases(m, consumed) {
+function consumeLease(m, consumed) {
   const set = new Set((m.orchestration && m.orchestration.leases) || []);
   if (consumed) set.delete(consumed);
-  for (const k of currentLeaseKeys(m)) set.add(k);
   m.orchestration = m.orchestration || {};
   m.orchestration.leases = [...set];
 }
-function reissueLeases(m) {
+function replaceActionLeases(m, actions, limit) {
   m.orchestration = m.orchestration || {};
-  m.orchestration.leases = currentLeaseKeys(m);
+  if (Number.isInteger(limit)) m.orchestration.dispatch_limit = limit;
+  else delete m.orchestration.dispatch_limit;
+  const previous = new Set(m.orchestration.leases || []);
+  const keys = (actions || []).map(leaseKey).filter(Boolean);
+  for (const k of keys) if (!previous.has(k)) markDispatched(m, k);
+  m.orchestration.leases = keys;
+}
+function authorizeAction(m, action) {
+  const key = leaseKey(action || {});
+  if (!key) return 'not-runnable';
+  m.orchestration = m.orchestration || {};
+  const leases = new Set(m.orchestration.leases || []);
+  if (leases.has(key)) return 'in-flight';
+  const limit = m.orchestration.dispatch_limit;
+  if (Number.isInteger(limit) && leases.size >= limit) return 'at-limit';
+  markDispatched(m, key);
+  leases.add(key);
+  m.orchestration.leases = [...leases];
+  return 'authorized';
 }
 function requireLease(m, key) {
   const leases = (m.orchestration && m.orchestration.leases) || [];
@@ -138,7 +193,12 @@ function enrichDecision(m, r) {
 // produce/test ⇒ true(同回合續跑),clarify/done/halt ⇒ false。停點語意由 SKILL.md 獨家擁有。
 function nextStep(m) {
   const next = decide(m, ctxOf(m));   // m / ctx 此刻已是記回後的新狀態(已 writeCtx + save)
-  return { next: enrichAction(m, next, false), continue: next.type === 'produce' || next.type === 'test' };
+  const runnable = next.type === 'produce' || next.type === 'test';
+  const authorization = runnable ? authorizeAction(m, next) : 'not-runnable';
+  if (authorization === 'in-flight' || authorization === 'at-limit') {
+    return { next: { type: 'batch-in-flight' }, continue: false };
+  }
+  return { next: enrichAction(m, next, false), continue: runnable };
 }
 
 // ── result.json schema 驗證:套用前擋下不合法結果(exit 1、manifest 不動、回合不增)。──
@@ -162,10 +222,44 @@ function validateProduceResult(m, specId, r) {
   } else if (r.outputs !== undefined && (!Array.isArray(r.outputs) || r.outputs.some(o => typeof o !== 'string'))) {
     errs.push('outputs 必須是 string 陣列');
   }
+  if (r.ok !== false && r.retained_outputs !== undefined &&
+      (!Array.isArray(r.retained_outputs) || r.retained_outputs.some(o => typeof o !== 'string'))) {
+    errs.push('retained_outputs 必須是 string 陣列(僅供 review_gate spec 重做時沿用既有 outputs)');
+  }
+  if (r.ok !== false && Array.isArray(r.retained_outputs)) {
+    const s = m.specs[specId];
+    // 結構性誤用(非 review_gate / 缺 outputs)先擋,不再往下比對上一版——那些訊息在誤用時只是噪音。
+    if (!Array.isArray(r.outputs)) errs.push('使用 retained_outputs 時 outputs 必須是 string 陣列(無 changed output 時填空陣列)');
+    if (!s.review_gate) errs.push('retained_outputs 只允許 review_gate spec 使用');
+    if (Array.isArray(r.outputs) && s.review_gate) {
+      const previous = new Set((s.outputs || []).map(String));
+      const notPrevious = r.retained_outputs.filter(o => !previous.has(String(o)));
+      if (notPrevious.length) errs.push(`retained_outputs 只能沿用該 spec 上一版 outputs:${notPrevious.join(', ')}`);
+      const changed = new Set(r.outputs.map(String));
+      const overlap = r.retained_outputs.filter(o => changed.has(String(o)));
+      if (overlap.length) errs.push(`outputs 與 retained_outputs 不得重疊:${overlap.join(', ')}`);
+      const combined = new Set([...r.outputs, ...r.retained_outputs, ...(r.deleted || [])].map(String));
+      const omitted = [...previous].filter(o => !combined.has(o));
+      if (omitted.length) errs.push(`重做 review_gate spec 時 outputs、retained_outputs 與 deleted 必須完整處置上一版 outputs:${omitted.join(', ')}`);
+      const deleted = new Set((r.deleted || []).map(String));
+      const retainedDeleted = r.retained_outputs.filter(o => deleted.has(String(o)));
+      if (retainedDeleted.length) errs.push(`retained_outputs 與 deleted 不得重疊:${retainedDeleted.join(', ')}`);
+    }
+  }
   if (r.ok !== false && r.deleted !== undefined && (!Array.isArray(r.deleted) || r.deleted.some(o => typeof o !== 'string'))) {
     errs.push('deleted 必須是 string 陣列(本站實際刪除的檔路徑)');
   }
+  validateUsage(r.usage, errs);
   return errs;
+}
+function validateUsage(usage, errs) {
+  if (usage === undefined) return;
+  if (!isPlainObject(usage)) { errs.push('usage 必須是 object'); return; }
+  for (const key of ['input_tokens', 'output_tokens']) {
+    if (usage[key] !== undefined && (!Number.isInteger(usage[key]) || usage[key] < 0)) {
+      errs.push(`usage.${key} 必須是非負整數`);
+    }
+  }
 }
 function validateTestResult(m, testId, r) {
   const errs = [];
@@ -187,6 +281,7 @@ function validateTestResult(m, testId, r) {
   }
   if (r.evidence !== undefined && !isPlainObject(r.evidence)) errs.push('evidence 必須是 object');
   if (r.env_patch !== undefined && !isPlainObject(r.env_patch)) errs.push('env_patch 必須是 object');
+  validateUsage(r.usage, errs);
 
   // ── 實跑證據:防「沒跑卻報 pass」。pass 是引擎把 spec 標 verified 的唯一輸入,
   // 沒有證據的 pass 一律拒收;有計數就做一致性檢查(編造一份內部一致又與摘要相符的
@@ -309,8 +404,12 @@ function undeclaredChanges(m, specId, result) {
   const cwd = fs.realpathSync(process.cwd());
   const norm = p => toPosix(path.relative(cwd, path.resolve(cwd, p)));
   const declared = new Set([...(result.outputs || []), ...(result.deleted || [])].map(norm));
-  // 同一 run 先前站已記回的 outputs 通常還沒 commit,一樣出現在 git status——不算本站未申報。
-  for (const s of Object.values(m.specs)) for (const o of (s.outputs || [])) declared.add(norm(o));
+  // 同一 run 先前站已記回的 outputs / deleted 通常還沒 commit,一樣出現在 git status——
+  // 不算本站未申報。deleted 必須持久化,否則一個合法刪檔會卡死所有後續 produce。
+  for (const s of Object.values(m.specs)) {
+    for (const o of (s.outputs || [])) declared.add(norm(o));
+    for (const d of (s.deleted || [])) declared.add(norm(d));
+  }
   // 平行批次序列記回途中,其他 in-flight produce 的檔已落盤但還沒輪到記回:只豁免「該 spec 有
   // 宣告 allowed_outputs ownership」的範圍——平行安全本就靠不重疊的 ownership(見 SKILL)。
   const inflight = ((m.orchestration || {}).leases || [])
@@ -332,7 +431,7 @@ if (!cmd || !manifestPath) {
 if (cmd === 'next') {
   const m = load(manifestPath);
   const r = decide(m, ctxOf(m));
-  if (r.type === 'produce' || r.type === 'test') reissueLeases(m);
+  if (r.type === 'produce' || r.type === 'test') replaceActionLeases(m, [r]);
   save(manifestPath, m);
   out(enrichDecision(m, r));
   process.exit(0);
@@ -344,8 +443,11 @@ if (cmd === 'next') {
 // 但結果一律序列記回(逐一 cli.js produce / test),平行的只有 worker 做事,不是改 manifest。
 if (cmd === 'next-all') {
   const m = load(manifestPath);
-  const r = decideAll(m, ctxOf(m));
-  if (r.type === 'batch') reissueLeases(m);
+  const limitIndex = process.argv.indexOf('--limit');
+  const rawLimit = limitIndex >= 0 ? Number(process.argv[limitIndex + 1]) : null;
+  if (limitIndex >= 0 && (!Number.isInteger(rawLimit) || rawLimit < 1)) fail('--limit 必須是正整數');
+  const r = decideAll(m, ctxOf(m), { limit: rawLimit });
+  if (r.type === 'batch') replaceActionLeases(m, r.actions, rawLimit);
   save(manifestPath, m);
   out(enrichDecision(m, r));
   process.exit(0);
@@ -364,9 +466,20 @@ if (cmd === 'produce') {
 
   // outputs 存在性:宣稱寫了的檔必須真的在磁碟上(對所有 worker 的「謊報寫檔」做一刀通用的
   // 確定性守門——outputs 是下游站的輸入與 review gate 給使用者看的東西,記回前先驗真)。
-  if (result.ok !== false && Array.isArray(result.outputs)) {
-    const missing = result.outputs.filter(p => !fs.existsSync(path.resolve(p)));
-    if (missing.length) fail(`outputs 裡的檔不存在於磁碟(worker 宣稱寫了但沒寫?manifest 未變動、回合未增):\n  - ${missing.join('\n  - ')}\n  (執行目錄:${process.cwd()};outputs 路徑應相對於專案工作目錄)`);
+  if (result.ok !== false && (Array.isArray(result.outputs) || Array.isArray(result.retained_outputs))) {
+    const declaredCurrent = [...(result.outputs || []), ...(result.retained_outputs || [])];
+    const missing = declaredCurrent.filter(p => !fs.existsSync(path.resolve(p)));
+    if (missing.length) fail(`outputs / retained_outputs 裡的檔不存在於磁碟(manifest 未變動、回合未增):\n  - ${missing.join('\n  - ')}\n  (執行目錄:${process.cwd()};路徑應相對於專案工作目錄)`);
+  }
+
+  // retained 內容硬驗:宣稱「原樣沿用上一版」的檔,內容雜湊必須與上次記回時存下的基準
+  // (spec.output_hashes)一致。orchestrator/ 不在未申報修改的檢查範圍內,沒有這道驗證,
+  // 「宣稱 retained 卻偷改」就只能靠 worker 自律。無基準(舊 manifest)時只驗存在性。
+  if (result.ok !== false && Array.isArray(result.retained_outputs) && result.retained_outputs.length &&
+      isPlainObject(m.specs[arg1].output_hashes)) {
+    const baseline = m.specs[arg1].output_hashes;
+    const tampered = result.retained_outputs.filter(p => baseline[p] === undefined || fileHash(p) !== baseline[p]);
+    if (tampered.length) fail(`retained_outputs 宣稱原樣沿用上一版,但內容與上次記回時不同(manifest 未變動、回合未增):\n  - ${tampered.join('\n  - ')}\n  實際有改的檔請移入 outputs(並更新範圍宣告),或還原檔案內容後重新記回`);
   }
 
   // deleted 申報:刪檔沒有「檔案存在」可驗,反向驗——宣告刪了的檔必須真的不在磁碟上,
@@ -408,14 +521,19 @@ if (cmd === 'produce') {
 
   applyProduce(m, arg1, result);
 
-  // 審查紀錄落盤到 manifest(執行期欄位,由 cli 寫):供 audit 與下一輪升級判斷追溯。
-  if (result.ok !== false) {
-    m.specs[arg1].last_review = { depth: result.review.depth, record: result.review.record || null };
-  }
-
   // 守門擋下:worker 報 ok,但產出命中 spec 宣告的 forbid_outputs / allowed_outputs → applyProduce 已改判 failed。
-  // 偵測法 = 「沒回報失敗、卻變成 failed」,以便比照一般 produce 失敗留訊號並對 orchestrator 揭露原因。
   const guardRejected = result.ok !== false && m.specs[arg1].status === 'failed';
+
+  // 審查紀錄落盤到 manifest(執行期欄位,由 cli 寫):供 audit 與下一輪升級判斷追溯。
+  if (result.ok !== false && !guardRejected) {
+    m.specs[arg1].last_review = { depth: result.review.depth, record: result.review.record || null };
+    // review_gate spec 記回成功時把每份 output 的內容雜湊落盤,作為下次重做驗 retained_outputs
+    // 「原樣沿用」的基準(執行期欄位,由 cli 寫)。
+    if (m.specs[arg1].review_gate) {
+      m.specs[arg1].output_hashes = Object.fromEntries(
+        (m.specs[arg1].outputs || []).filter(p => fs.existsSync(path.resolve(p))).map(p => [p, fileHash(p)]));
+    }
+  }
 
   const ctx = ctxOf(m);
   ctx.turn += 1;                       // 執行了一個動作 → 回合 +1(終止保證靠它)
@@ -434,7 +552,9 @@ if (cmd === 'produce') {
     ctx.failSignals = clearSignalsFor(ctx.failSignals, arg1);
   }
   writeCtx(m, ctx);
-  refreshLeases(m, `produce:${arg1}`);   // 消耗本次授權;重做等新授權由記回後的狀態重新算出
+  markCompleted(m, `produce:${arg1}`, result.ok === false || guardRejected ? 'failed' : 'passed', result.usage);
+  consumeLease(m, `produce:${arg1}`);
+  const continuation = nextStep(m);      // 內嵌 action 出現在 response 時才發派與計 metrics
   save(manifestPath, m);
 
   // review gate:產出成功但 spec 宣告 review_gate → applyProduce 已標 blocked(kind:'review'),
@@ -445,7 +565,7 @@ if (cmd === 'produce') {
         ...(result.ok === false ? { failed: true, blame: result.blame || null } : {}),
         ...(guardRejected ? { failed: true, rejected: 'output_guard', reason: m.specs[arg1].last_failure } : {}),
         ...(reviewGated ? { review_gate: true, clarify: m.specs[arg1].clarify } : {}),
-        ...nextStep(m) });
+        ...continuation });
   process.exit(0);
 }
 
@@ -483,24 +603,26 @@ if (cmd === 'test') {
     ctx.failSignals = clearSignalsFor(ctx.failSignals, m.tests[arg1].verifies, arg1);
   }
   writeCtx(m, ctx);
-  refreshLeases(m, `test:${arg1}`);   // 消耗本次授權;重跑 / 重做的新授權由記回後的狀態算出
+  markCompleted(m, `test:${arg1}`, result.pass ? 'passed' : 'failed', result.usage);
+  consumeLease(m, `test:${arg1}`);
+  const continuation = nextStep(m);
   save(manifestPath, m);
 
   if (result.pass) {
     out({ recorded: 'test', test: arg1, pass: true, spec: m.tests[arg1].verifies, turn: ctx.turn,
-          ...nextStep(m) });
+          ...continuation });
   } else if (altitude === 'environment') {
     // manifest 層級 block:不歸咎任何 spec,等使用者修好環境後 `resume <testId>` 重跑該 test
     out({ recorded: 'test', test: arg1, pass: false, altitude: 'environment', blocked: true,
-          scope: 'environment', clarify: m.block.question, turn: ctx.turn, ...nextStep(m) });
+          scope: 'environment', clarify: m.block.question, turn: ctx.turn, ...continuation });
   } else if (altitude === 'requirement') {
     const target = blameTargetId(m, arg1, result);
     out({ recorded: 'test', test: arg1, pass: false, altitude: 'requirement', blocked: true,
-          spec: target, clarify: m.specs[target].clarify, turn: ctx.turn, ...nextStep(m) });
+          spec: target, clarify: m.specs[target].clarify, turn: ctx.turn, ...continuation });
   } else {
     const target = blameTargetId(m, arg1, result);
     out({ recorded: 'test', test: arg1, pass: false, altitude,
-          go_back_to: target, fix_target: m.specs[target].fix_target, turn: ctx.turn, ...nextStep(m) });
+          go_back_to: target, fix_target: m.specs[target].fix_target, turn: ctx.turn, ...continuation });
   }
   process.exit(0);
 }
@@ -543,7 +665,6 @@ if (cmd === 'resume') {
   // 釐清 = 這個 target(被 resume 的 spec 或 environment block 的 test)有進度 → 只清它的震盪訊號。
   ctx.failSignals = clearSignalsFor(ctx.failSignals, arg1);
   writeCtx(m, ctx);
-  refreshLeases(m);   // 解除 blocked 後世界改變,重算本輪授權
   save(manifestPath, m);
 
   out({ recorded: 'resume', ...targetDesc, turn: ctx.turn });
@@ -579,6 +700,8 @@ if (cmd === 'validate') {
     if (!specs[t.verifies]) errors.push(`test「${id}」verifies 指向不存在的 spec「${t.verifies}」`);
     for (const d of (t.depends_on || []))
       if (!tests[d]) errors.push(`test「${id}」depends_on 指向不存在的 test「${d}」`);
+    if (t.parallel_safe !== undefined && typeof t.parallel_safe !== 'boolean') errors.push(`test「${id}」parallel_safe 必須是 boolean`);
+    if (t.resource_keys !== undefined && (!Array.isArray(t.resource_keys) || t.resource_keys.some(k => typeof k !== 'string' || !k.trim()))) errors.push(`test「${id}」resource_keys 必須是非空 string 陣列`);
   }
 
   // review_map 是 orchestrator 的策略資料,不參與 decide.js routing;但 defer 代表 produce 前
@@ -629,4 +752,22 @@ if (cmd === 'validate') {
   process.exit(0);
 }
 
-fail(`未知指令「${cmd}」。可用: next / next-all / produce / test / resume / validate`);
+// ── metrics:唯讀彙總 action 次數、等待時間與 host 選填回報的 token usage。────────
+if (cmd === 'metrics') {
+  const m = load(manifestPath);
+  const metrics = ((m.orchestration || {}).metrics) || { actions: {} };
+  const actions = Object.entries(metrics.actions || {}).map(([action, value]) => ({ action, ...value }));
+  out({
+    dispatched: metrics.dispatched || 0,
+    completed: metrics.completed || 0,
+    retries: actions.reduce((sum, a) => sum + Math.max(0, (a.dispatch_count || 0) - 1), 0),
+    total_wait_ms: actions.reduce((sum, a) => sum + (a.total_wait_ms || 0), 0),
+    input_tokens: metrics.input_tokens || 0,
+    output_tokens: metrics.output_tokens || 0,
+    total_tokens: metrics.total_tokens || 0,
+    actions,
+  });
+  process.exit(0);
+}
+
+fail(`未知指令「${cmd}」。可用: next / next-all / produce / test / resume / validate / metrics`);
