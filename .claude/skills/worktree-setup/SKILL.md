@@ -1,15 +1,15 @@
 ---
 name: worktree-setup
-description: flow 無關的隔離工作區建立器。吃 commit type 與 scope，跑 scripts/worktree.js 從當前（或指定 base）分支 `git worktree add` 出獨立目錄＋新分支（`<type>/<scope>`，自動 sanitize、collision 加尾碼、冪等重用），讓多個 task 在同一 repo 平行互不污染。回傳 worktree 路徑、最終分支與 scope 供後續 commit / journal 沿用。全程 local，不碰 remote。Use when a task needs its own isolated git worktree + branch before running a flow; do not use to commit, run the pipeline itself, or for any remote / push operation.
+description: flow 無關的隔離 worktree 建立器。吃 commit type 與 scope，跑 scripts/worktree.js 從當前（或指定 base）分支 `git worktree add` 出獨立目錄＋新分支（`<type>/<scope>`，自動 sanitize、collision 加尾碼、冪等重用），讓多個 task 在同一 repo 平行互不污染。回傳 worktree 路徑、最終分支與 scope 供後續 commit / journal 沿用。全程 local，不碰 remote。Use when a task needs its own isolated git worktree + branch before running a flow; do not use to commit, run the pipeline itself, or for any remote / push operation.
 ---
 
 # worktree-setup
 
 ## 用途
 
-把「一個 task 一個隔離工作區」這件事獨立成一個 skill。它跑 `scripts/worktree.js`，以**當前分支（或 `--base` 指定的分支）為起點**,`git worktree add` 出一個**獨立目錄 + 新分支**,分支名 = `<type>/<scope>`。
+為一個 task 建立一個隔離 worktree。它跑 `scripts/worktree.js`，以**當前分支（或 `--base` 指定的分支）為起點**,`git worktree add` 出**獨立目錄 + 新分支**;分支名 = `<type>/<scope>`。
 
-它存在的理由是:**同一個 repo 要同時跑多個 task**。一個 git repo 只有一份工作樹,多個 task 若擠在同一個目錄,就算各自切不同分支,磁碟上的檔案還是糾在一起。worktree 給每個 task 一個**獨立目錄**,才是真正的平行隔離。
+理由:**同一個 repo 要同時跑多個 task**。一個 git repo 只有一份 worktree;多個 task 擠在同一個目錄時,就算各自切不同分支,磁碟檔案仍會互相糾纏。worktree 給每個 task 一個**獨立目錄**,才是真正的平行隔離。
 
 **它與 flow 完全無關**:只認 `type` + `scope`,不知道之後要跑哪條 pipeline。分支命名規則只住在這裡。
 
@@ -17,7 +17,7 @@ description: flow 無關的隔離工作區建立器。吃 commit type 與 scope�
 
 ## 何時使用
 
-- 一條 task 開始前,需要先有專屬的隔離工作區。
+- 一條 task 開始前,需要先有專屬的隔離 worktree。
 
 不要在這些情境使用:
 - 要 commit / 跑 pipeline 本身(那是後續 commit / 編排器的事)。

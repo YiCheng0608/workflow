@@ -7,7 +7,7 @@ description: 安全移除一個 task 的隔離 worktree（worktree-setup 的逆�
 
 ## 用途
 
-把一個 task 跑完、用不到的隔離 worktree **安全移除**。它是隔離工作區建立器的逆操作。
+安全移除已完成、用不到的隔離 worktree。它是 `worktree-setup` 的逆操作。
 
 **為什麼需要它、而不是直接 `git worktree remove`**:過程產物（摘要、狀態檔等，**約定一律放 `orchestrator/` 底下**、通常已發進 journal）永遠以 untracked 殘留,會讓 `git worktree remove`(不加 `--force`)**一律拒絕**——「成功(code 已 commit、只剩過程噪音)」與「失敗(code 沒 commit)」在 git 眼裡一樣髒,**分不出來**。若你養成「反正加 `--force`」的習慣,失敗路徑沒提交的 code 就會被一起清掉。
 
@@ -16,7 +16,7 @@ description: 安全移除一個 task 的隔離 worktree（worktree-setup 的逆�
 - 有未提交 code → **拒絕移除**(work 會遺失),除非明確 `--force`。
 - 沒有 → 用 `--force` 跨過 `orchestrator/` 過程噪音**安全移除**(安全性已自行確認)。
 
-這正好對上「**成功才移除、失敗要擋**」:交付 commit 成功後 code 都進了分支、只剩 `orchestrator/` 過程產物 → 乾淨移除；commit 失敗或未執行時 code 還在工作樹未提交 → 擋下。
+這對上「**成功才移除、失敗要擋**」:commit 成功後 code 已在分支上、只剩 `orchestrator/` 過程產物 → 乾淨移除；commit 失敗或未執行時 code 還在 worktree 未提交 → 擋下。
 
 ## 何時使用
 
