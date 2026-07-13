@@ -1,0 +1,12 @@
+'use strict';
+const assert = require('assert');
+const path = require('path');
+const { execFileSync } = require('child_process');
+const script = path.join(__dirname, 'workflow-benchmark.js');
+const result = JSON.parse(execFileSync(process.execPath, [script, '--runs', '1'], { encoding: 'utf8' }));
+assert.equal(result.profiles.compact.dispatched, 2);
+assert.equal(result.profiles.light.dispatched, 10);
+assert.equal(result.profiles.compact.completed, 2);
+assert.equal(result.profiles.light.completed, 10);
+assert.equal(result.profiles.comparison.dispatch_reduction, 0.8);
+console.log('workflow-benchmark: 5 passed');
